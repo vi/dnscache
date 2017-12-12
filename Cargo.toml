@@ -5,3 +5,8 @@ authors = ["Vitaly _Vi Shukela <vi0oss@gmail.com>"]
 
 [dependencies]
 dns-parser = { version = "0.7" }
+compactmap = { version = "0.3" }
+bytes = { version = "0.4" }
+serde = { version = "1" }
+serde_derive = { version = "1" }
+rustbreak = { version = "1" }
