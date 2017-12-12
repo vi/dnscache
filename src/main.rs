@@ -93,7 +93,7 @@ fn run() -> Result<(),Box<std::error::Error>> {
                 }
                 
                 let dom = q.qname.to_string();
-                println!("{:?} {}", q.qtype, dom);
+                println!("{:?}\t{}", q.qtype, dom);
                 let sq = SimplifiedQuestion {
                     dom,
                     a:    q.qtype == A    || q.qtype == QTAll,
@@ -114,11 +114,17 @@ fn run() -> Result<(),Box<std::error::Error>> {
                 sa: src,
             };
             
+            
+            let mut num_answers = 0u16;
+            for q in &r.q {
+                if q.a    { num_answers += 1 }
+                if q.aaaa { num_answers += 1 }
+            }
             reply_buf.clear();
             reply_buf.put_u16::<BE>(r.id);
             reply_buf.put_u16::<BE>(0x8180); // response, recursion
             reply_buf.put_u16::<BE>(r.q.len() as u16); // q-s
-            reply_buf.put_u16::<BE>(r.q.len() as u16); // a-s
+            reply_buf.put_u16::<BE>(num_answers); // a-s
             reply_buf.put_u16::<BE>(0); // auth-s
             reply_buf.put_u16::<BE>(0); // addit
             for q in &r.q {
@@ -127,20 +133,46 @@ fn run() -> Result<(),Box<std::error::Error>> {
                     reply_buf.put(l);
                 }
                 reply_buf.put_u8(0x00); // end of name
-                reply_buf.put_u16::<BE>(0x0001); // A
+                if q.a && q.aaaa {
+                    reply_buf.put_u16::<BE>(0x00FF); // All
+                } else if q.a {
+                    reply_buf.put_u16::<BE>(0x0001); // A
+                } else if q.aaaa {
+                    reply_buf.put_u16::<BE>(0x001C); // AAAA
+                } else {
+                    println!("?");
+                    reply_buf.put_u16::<BE>(0x0000);
+                }
                 reply_buf.put_u16::<BE>(0x0001); // IN
             }
             for q in &r.q {
-                for l in q.dom.split(".") {
-                    reply_buf.put_u8(l.len() as u8); // < 64
-                    reply_buf.put(l);
+                if q.a {
+                    for l in q.dom.split(".") {
+                        reply_buf.put_u8(l.len() as u8); // < 64
+                        reply_buf.put(l);
+                    }
+                    reply_buf.put_u8(0x00); // end of name
+                    reply_buf.put_u16::<BE>(0x0001); // A
+                    reply_buf.put_u16::<BE>(0x0001); // IN
+                    reply_buf.put_u32::<BE>(3600); // TTL
+                    reply_buf.put_u16::<BE>(4); // data len
+                    reply_buf.put_u32::<BE>(0x7F000506); // IP
                 }
-                reply_buf.put_u8(0x00); // end of name
-                reply_buf.put_u16::<BE>(0x0001); // A
-                reply_buf.put_u16::<BE>(0x0001); // IN
-                reply_buf.put_u32::<BE>(3600); // TTL
-                reply_buf.put_u16::<BE>(4); // data len
-                reply_buf.put_u32::<BE>(0x7F000506); // IP
+                if q.aaaa {
+                    for l in q.dom.split(".") {
+                        reply_buf.put_u8(l.len() as u8); // < 64
+                        reply_buf.put(l);
+                    }
+                    reply_buf.put_u8(0x00); // end of name
+                    reply_buf.put_u16::<BE>(0x001C); // A
+                    reply_buf.put_u16::<BE>(0x0001); // IN
+                    reply_buf.put_u32::<BE>(3600); // TTL
+                    reply_buf.put_u16::<BE>(16); // data len
+                    reply_buf.put_u32::<BE>(0x7F000506); // IP
+                    reply_buf.put_u32::<BE>(0x7F000506); // IP
+                    reply_buf.put_u32::<BE>(0x7F000506); // IP
+                    reply_buf.put_u32::<BE>(0x7F000506); // IP
+                }
             }
             
             s.send_to(&reply_buf[..], &src)?;
