@@ -6,7 +6,8 @@ extern crate dns_parser;
 extern crate compactmap;
 #[macro_use]
 extern crate serde_derive;
-extern crate rustbreak;
+extern crate serde_cbor;
+extern crate rusty_leveldb;
 extern crate bytes;
 
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
@@ -15,10 +16,12 @@ use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
 use dns_parser::QueryClass::{IN,Any as QCAny};
 use std::collections::HashMap;
 use compactmap::CompactMap;
-use rustbreak::Database;
+use rusty_leveldb::DB;
 use std::time::Duration;
 use std::io::Cursor;
 use bytes::{BufMut,BigEndian as BE};
+use serde_cbor::de::from_slice;
+use serde_cbor::ser::to_vec;
 
 type CacheId = usize;
 type Time = u64;
@@ -58,22 +61,54 @@ enum TryAnswerRequestResult {
 }
 
 fn try_answer_request(
+                db : &mut DB,
                 s : &UdpSocket, 
                 reply_buf:&mut Vec<u8>, 
                 r: &SimplifiedRequest
                 ) -> BoxResult<TryAnswerRequestResult> {
-    assert!(r.unknowns_remain == 0);
     
-    let mut num_answers = 0u16;
+    let mut num_unknowns = 0;
+    
+    let mut ans_a    = Vec::with_capacity(4);
+    let mut ans_aaaa = Vec::with_capacity(4);
+    
     for q in &r.q {
-        if q.a    { num_answers += 1 }
-        if q.aaaa { num_answers += 1 }
+        assert!(q.a || q.aaaa);
+        if let Some(ceb) = db.get(q.dom.as_bytes()) {
+            let ce : CacheEntry = from_slice(&ceb[..])?;
+            if q.a {
+                if let Some(a) = ce.a {
+                    ans_a.push((q.dom.clone(), a));
+                } else {
+                    num_unknowns += 1;
+                    continue;
+                }
+            }
+            
+            if q.aaaa {
+                if let Some(aaaa) = ce.aaaa {
+                    ans_aaaa.push((q.dom.clone(), aaaa));
+                } else {
+                    num_unknowns += 1;
+                    continue;
+                }
+            }
+        } else {
+            num_unknowns += 1;
+        }
     }
+    
+    if num_unknowns > 0 { 
+        return Ok(TryAnswerRequestResult::UnknownsRemain(num_unknowns));
+    }
+    let mut num_answers = ans_a.len() + ans_aaaa.len();
+    if num_answers > 65535 { num_answers=65535; }
+    
     reply_buf.clear();
     reply_buf.put_u16::<BE>(r.id);
     reply_buf.put_u16::<BE>(0x8180); // response, recursion
     reply_buf.put_u16::<BE>(r.q.len() as u16); // q-s
-    reply_buf.put_u16::<BE>(num_answers); // a-s
+    reply_buf.put_u16::<BE>(num_answers as u16); // a-s
     reply_buf.put_u16::<BE>(0); // auth-s
     reply_buf.put_u16::<BE>(0); // addit
     for q in &r.q {
@@ -94,9 +129,9 @@ fn try_answer_request(
         }
         reply_buf.put_u16::<BE>(0x0001); // IN
     }
-    for q in &r.q {
-        if q.a {
-            for l in q.dom.split(".") {
+    for (dom, a) in ans_a {
+        for ip in a {
+            for l in dom.split(".") {
                 reply_buf.put_u8(l.len() as u8); // < 64
                 reply_buf.put(l);
             }
@@ -105,10 +140,12 @@ fn try_answer_request(
             reply_buf.put_u16::<BE>(0x0001); // IN
             reply_buf.put_u32::<BE>(3600); // TTL
             reply_buf.put_u16::<BE>(4); // data len
-            reply_buf.put_u32::<BE>(0x7F000506); // IP
+            reply_buf.put(&ip.octets()[..]);
         }
-        if q.aaaa {
-            for l in q.dom.split(".") {
+    }
+    for (dom, aaaa) in ans_aaaa {
+        for ip6 in aaaa {
+            for l in dom.split(".") {
                 reply_buf.put_u8(l.len() as u8); // < 64
                 reply_buf.put(l);
             }
@@ -117,10 +154,7 @@ fn try_answer_request(
             reply_buf.put_u16::<BE>(0x0001); // IN
             reply_buf.put_u32::<BE>(3600); // TTL
             reply_buf.put_u16::<BE>(16); // data len
-            reply_buf.put_u32::<BE>(0x7F000506); // IP
-            reply_buf.put_u32::<BE>(0x7F000506); // IP
-            reply_buf.put_u32::<BE>(0x7F000506); // IP
-            reply_buf.put_u32::<BE>(0x7F000506); // IP
+            reply_buf.put(&ip6.octets()[..]);
         }
     }
     
@@ -129,7 +163,7 @@ fn try_answer_request(
 }
 
 struct ProgState {
-    db : Database<CacheEntry>,
+    db : DB,
     s : UdpSocket,
     buf: [u8; 1600],
     amt: usize,
@@ -196,7 +230,29 @@ impl ProgState {
             unknowns_remain: 0,
         };
         
-        try_answer_request(&self.s, &mut self.reply_buf, &r)?;
+        for q in &r.q {
+            if let None = self.db.get(q.dom.as_bytes()) {
+                let ce = CacheEntry {
+                    a:    Some(vec!["127.1.2.3".parse()?]),
+                    aaaa: Some(vec!["23::44".parse()?]),
+                    obtained: 123,
+                    ttl: Default::default(),
+                };
+                self.db.put(q.dom.as_bytes(), &to_vec(&ce)?[..])?;
+                self.db.flush()?;
+                println!("Saved to database: {}", q.dom);
+            }
+        }
+        
+        use TryAnswerRequestResult::UnknownsRemain;
+        if let UnknownsRemain(x) = try_answer_request(
+                                        &mut self.db,
+                                        &self.s, 
+                                        &mut self.reply_buf, 
+                                        &r
+                        )? {
+            println!("Unknowns remain: {}", x);
+        }
         Ok(())
     }
 
@@ -214,7 +270,8 @@ impl ProgState {
 
 fn run() -> BoxResult<()> {
 
-    let db : Database<CacheEntry> = Database::open("./db")?;
+    let dbopts : rusty_leveldb::Options = Default::default();
+    let db = DB::open("./db", dbopts)?;
 
     let s = UdpSocket::bind("0.0.0.0:3553")?;
     let upstream : SocketAddr = "8.8.8.8:53".parse()?;

@@ -8,5 +8,6 @@ dns-parser = { version = "0.7" }
 compactmap = { version = "0.3" }
 bytes = { version = "0.4" }
 serde = { version = "1" }
+serde_cbor = { version = "0.6" }
 serde_derive = { version = "1" }
-rustbreak = { version = "1" }
+rusty-leveldb = { version = "0.1" }
