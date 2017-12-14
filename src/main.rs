@@ -33,7 +33,7 @@ struct CacheEntry {
     a: Option<Vec<Ipv4Addr>>, // None - unqueried
     aaaa: Option<Vec<Ipv6Addr>>,
     obtained : Time,
-    ttl: Duration,
+    ttl: u32,
 }
 
 type Cache = CompactMap<CacheEntry>;
@@ -55,10 +55,6 @@ struct SimplifiedRequest {
     unknowns_remain: usize,
 }
 
-enum TryAnswerRequestResult {
-    Resolved,
-    UnknownsRemain(usize),
-}
 
 struct ScratchSpace {
     reply_buf: Vec<u8>,
@@ -135,6 +131,11 @@ fn send_dns_reply(
     Ok(())
 }
 
+
+enum TryAnswerRequestResult {
+    Resolved,
+    UnknownsRemain(usize),
+}
 fn try_answer_request(
                 db : &mut DB,
                 s : &UdpSocket,
