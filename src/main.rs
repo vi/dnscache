@@ -16,6 +16,7 @@ use dns_parser::Packet;
 use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
 use dns_parser::QueryClass::{IN,Any as QCAny};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use compactmap::CompactMap;
 use rusty_leveldb::DB;
 use std::time::Duration;
@@ -29,16 +30,15 @@ type CacheId = usize;
 type Time = u64;
 
 type BoxResult<T> = Result<T,Box<std::error::Error>>;
+type Ttl = u32;
 
-#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 struct CacheEntry {
-    a: Option<Vec<Ipv4Addr>>, // None - unqueried
-    aaaa: Option<Vec<Ipv6Addr>>,
+    a: Option<Vec<(Ipv4Addr,Ttl)>>, // None - unqueried
+    aaaa: Option<Vec<(Ipv6Addr, Ttl)>>,
     obtained : Time,
-    ttl: u32,
 }
 
-type Cache = CompactMap<CacheEntry>;
 struct RequestToUs {
     entry: CacheId,
     reply_to: SocketAddr,
@@ -60,8 +60,8 @@ struct SimplifiedRequest {
 fn send_dns_reply(
                 s : &UdpSocket, 
                 r: &SimplifiedRequest,
-                ans_a:    &Vec<(String, Vec<Ipv4Addr>)>,
-                ans_aaaa: &Vec<(String, Vec<Ipv6Addr>)>,
+                ans_a:    &Vec<(String, Vec<(Ipv4Addr, Ttl)>)>,
+                ans_aaaa: &Vec<(String, Vec<(Ipv6Addr, Ttl)>)>,
                 ) -> BoxResult<()> {
     
     let mut num_answers = ans_a.len() + ans_aaaa.len();
@@ -93,7 +93,7 @@ fn send_dns_reply(
         reply_buf.put_u16::<BE>(0x0001); // IN
     }
     for &(ref dom, ref a) in ans_a {
-        for ip in a {
+        for &(ip, ttl) in a {
             for l in dom.split(".") {
                 reply_buf.put_u8(l.len() as u8); // < 64
                 reply_buf.put(l);
@@ -101,13 +101,14 @@ fn send_dns_reply(
             reply_buf.put_u8(0x00); // end of name
             reply_buf.put_u16::<BE>(0x0001); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
-            reply_buf.put_u32::<BE>(3600); // TTL
+            // FIXME: adjust TTL based on time it lived in the cache
+            reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(4); // data len
             reply_buf.put(&ip.octets()[..]);
         }
     }
     for &(ref dom, ref aaaa) in ans_aaaa {
-        for ip6 in aaaa {
+        for &(ip6, ttl) in aaaa {
             for l in dom.split(".") {
                 reply_buf.put_u8(l.len() as u8); // < 64
                 reply_buf.put(l);
@@ -115,7 +116,8 @@ fn send_dns_reply(
             reply_buf.put_u8(0x00); // end of name
             reply_buf.put_u16::<BE>(0x001C); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
-            reply_buf.put_u32::<BE>(3600); // TTL
+            // FIXME: adjust TTL based on time it lived in the cache
+            reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(16); // data len
             reply_buf.put(&ip6.octets()[..]);
         }
@@ -206,7 +208,91 @@ impl ProgState {
             return Ok(());
         }
         
-        println!("  reply");
+        
+        for ans in &p.answers {
+            let dom = ans.name.to_string();
+            if !self.dom_update_subscriptions.contains_key(&dom) {
+                println!("  unsolicited reply for {}", dom);
+                return Ok(())
+            }
+        }
+        
+        let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
+        
+        
+        for ans in &p.answers {
+            let dom = ans.name.to_string();
+            
+            let ce = tmp.entry(dom).or_insert(Default::default());
+            
+            if ans.cls != dns_parser::Class::IN { continue; }
+            use dns_parser::RRData;
+            match ans.data {
+                RRData::A(ip4)    => {
+                    if ce.a == None { ce.a = Some(Vec::new()); }
+                    let v = ce.a.as_mut().unwrap();
+                    v.push((ip4, ans.ttl));
+                }
+                RRData::AAAA(ip6) => {
+                    if ce.aaaa == None { ce.aaaa = Some(Vec::new()); }
+                    let v = ce.aaaa.as_mut().unwrap();
+                    v.push((ip6, ans.ttl));
+                }
+                _ => continue,
+            }
+        }
+        
+        for (dom, entry) in tmp {
+            /*
+            if let Some(ceb) = self.db.get(dom.as_bytes()) {
+                ce = from_slice(&ceb[..])?;
+            } else {
+                ce = CacheEntry {
+                    a:    None,
+                    aaaa: None,
+                    obtained: Default::default(),
+                    ttl: Default::default(),
+                };
+            }
+            */
+
+            //self.db.put(dom.as_bytes(), &to_vec(&ce)?[..])?;
+            //println!("  saved to database: {}", dom);
+        }
+        self.db.flush()?;
+        
+        for ans in &p.answers { 
+            let dom = ans.name.to_string();
+            let subs = self.dom_update_subscriptions.remove(&dom).unwrap();
+            let mut unhappy = Vec::new();
+            let mut happy = Vec::new();
+            for sub_id in subs {
+                use TryAnswerRequestResult::Resolved;
+                if let Some(r) = self.unreplied_requests.get(sub_id) {
+                    match try_answer_request(
+                                    &mut self.db,
+                                    &self.s, 
+                                    r
+                            )? {
+                        Resolved => {
+                            println!("  replied");
+                            happy.push(sub_id);
+                        }
+                        _ => {
+                            unhappy.push(sub_id);
+                        }
+                    }
+                } else {
+                    // request got replied in previous iteration
+                }
+            }
+            for id in happy {
+                let _ = self.unreplied_requests.remove(id);
+            }
+            if unhappy.len() > 0 {
+                self.dom_update_subscriptions.entry(dom).or_insert_vec(unhappy);
+            }
+        }
         
         Ok(())
     }
