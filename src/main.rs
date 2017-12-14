@@ -11,6 +11,9 @@ extern crate rusty_leveldb;
 extern crate bytes;
 extern crate multimap;
 
+// TODO: negative cache
+// TODO: re-requesting stale data
+
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
 use dns_parser::Packet;
 use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
