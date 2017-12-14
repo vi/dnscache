@@ -25,6 +25,7 @@ use bytes::{BufMut,BigEndian as BE};
 use serde_cbor::de::from_slice;
 use serde_cbor::ser::to_vec;
 use multimap::MultiMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 type CacheId = usize;
 type Time = u64;
@@ -219,13 +220,15 @@ impl ProgState {
         
         let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
         
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         
         for ans in &p.answers {
             let dom = ans.name.to_string();
+            if ans.cls != dns_parser::Class::IN { continue; }
             
             let ce = tmp.entry(dom).or_insert(Default::default());
+            ce.obtained = now;
             
-            if ans.cls != dns_parser::Class::IN { continue; }
             use dns_parser::RRData;
             match ans.data {
                 RRData::A(ip4)    => {
@@ -242,27 +245,28 @@ impl ProgState {
             }
         }
         
-        for (dom, entry) in tmp {
-            /*
+        for (dom, mut entry) in tmp.iter_mut() {
+            
+            let cached : CacheEntry;
             if let Some(ceb) = self.db.get(dom.as_bytes()) {
-                ce = from_slice(&ceb[..])?;
+                cached = from_slice(&ceb[..])?;
             } else {
-                ce = CacheEntry {
-                    a:    None,
-                    aaaa: None,
-                    obtained: Default::default(),
-                    ttl: Default::default(),
-                };
+                cached = Default::default();
             }
-            */
+            
+            if entry.a.is_none() && cached.a.is_some() {
+                entry.a = cached.a;
+            }
+            if entry.aaaa.is_none() && cached.aaaa.is_some() {
+                entry.aaaa = cached.aaaa;
+            }
 
-            //self.db.put(dom.as_bytes(), &to_vec(&ce)?[..])?;
-            //println!("  saved to database: {}", dom);
+            self.db.put(dom.as_bytes(), &to_vec(&entry)?[..])?;
+            println!("  saved to database: {}", dom);
         }
         self.db.flush()?;
         
-        for ans in &p.answers { 
-            let dom = ans.name.to_string();
+        for (dom, _) in tmp {
             let subs = self.dom_update_subscriptions.remove(&dom).unwrap();
             let mut unhappy = Vec::new();
             let mut happy = Vec::new();
@@ -312,10 +316,11 @@ impl ProgState {
                 _ => { weird_querty = true; }
             }
             match q.qtype {
-                A |
-                AAAA |
-                QTAll => {}
-                _ => { weird_querty = true; }
+                /*|*/ A
+                  |   AAAA
+                // | All // those are buggy: work only if both A and AAAA in reply
+                    => {}
+                _   => { weird_querty = true; }
             }
             
             let dom = q.qname.to_string();
