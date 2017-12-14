@@ -60,17 +60,94 @@ enum TryAnswerRequestResult {
     UnknownsRemain(usize),
 }
 
-fn try_answer_request(
-                db : &mut DB,
+struct ScratchSpace {
+    reply_buf: Vec<u8>,
+    ans_a:    Vec<(String, Vec<Ipv4Addr>)>,
+    ans_aaaa: Vec<(String, Vec<Ipv6Addr>)>,
+}
+
+fn send_dns_reply(
                 s : &UdpSocket, 
                 reply_buf:&mut Vec<u8>, 
+                r: &SimplifiedRequest,
+                ans_a:    &Vec<(String, Vec<Ipv4Addr>)>,
+                ans_aaaa: &Vec<(String, Vec<Ipv6Addr>)>,
+                ) -> BoxResult<()> {
+    
+    let mut num_answers = ans_a.len() + ans_aaaa.len();
+    if num_answers > 65535 { num_answers=65535; } // XXX
+    
+    reply_buf.clear();
+    reply_buf.put_u16::<BE>(r.id);
+    reply_buf.put_u16::<BE>(0x8180); // response, recursion, recursion
+    reply_buf.put_u16::<BE>(r.q.len() as u16); // q-s
+    reply_buf.put_u16::<BE>(num_answers as u16); // a-s
+    reply_buf.put_u16::<BE>(0); // auth-s
+    reply_buf.put_u16::<BE>(0); // addit
+    for q in &r.q {
+        for l in q.dom.split(".") {
+            reply_buf.put_u8(l.len() as u8); // XXX
+            reply_buf.put(l);
+        }
+        reply_buf.put_u8(0x00); // end of name
+        if q.a && q.aaaa {
+            reply_buf.put_u16::<BE>(0x00FF); // All
+        } else if q.a {
+            reply_buf.put_u16::<BE>(0x0001); // A
+        } else if q.aaaa {
+            reply_buf.put_u16::<BE>(0x001C); // AAAA
+        } else {
+            println!("?");
+            reply_buf.put_u16::<BE>(0x0000);
+        }
+        reply_buf.put_u16::<BE>(0x0001); // IN
+    }
+    for &(ref dom, ref a) in ans_a {
+        for ip in a {
+            for l in dom.split(".") {
+                reply_buf.put_u8(l.len() as u8); // < 64
+                reply_buf.put(l);
+            }
+            reply_buf.put_u8(0x00); // end of name
+            reply_buf.put_u16::<BE>(0x0001); // A
+            reply_buf.put_u16::<BE>(0x0001); // IN
+            reply_buf.put_u32::<BE>(3600); // TTL
+            reply_buf.put_u16::<BE>(4); // data len
+            reply_buf.put(&ip.octets()[..]);
+        }
+    }
+    for &(ref dom, ref aaaa) in ans_aaaa {
+        for ip6 in aaaa {
+            for l in dom.split(".") {
+                reply_buf.put_u8(l.len() as u8); // < 64
+                reply_buf.put(l);
+            }
+            reply_buf.put_u8(0x00); // end of name
+            reply_buf.put_u16::<BE>(0x001C); // A
+            reply_buf.put_u16::<BE>(0x0001); // IN
+            reply_buf.put_u32::<BE>(3600); // TTL
+            reply_buf.put_u16::<BE>(16); // data len
+            reply_buf.put(&ip6.octets()[..]);
+        }
+    }
+    
+    s.send_to(&reply_buf[..], &r.sa)?;
+    Ok(())
+}
+
+fn try_answer_request(
+                db : &mut DB,
+                s : &UdpSocket,
+                tmp: &mut ScratchSpace,
                 r: &SimplifiedRequest
                 ) -> BoxResult<TryAnswerRequestResult> {
     
     let mut num_unknowns = 0;
     
-    let mut ans_a    = Vec::with_capacity(4);
-    let mut ans_aaaa = Vec::with_capacity(4);
+    let mut ans_a = &mut tmp.ans_a;
+    let mut ans_aaaa = &mut tmp.ans_aaaa;
+    ans_a.clear();
+    ans_aaaa.clear();
     
     for q in &r.q {
         assert!(q.a || q.aaaa);
@@ -101,64 +178,7 @@ fn try_answer_request(
     if num_unknowns > 0 { 
         return Ok(TryAnswerRequestResult::UnknownsRemain(num_unknowns));
     }
-    let mut num_answers = ans_a.len() + ans_aaaa.len();
-    if num_answers > 65535 { num_answers=65535; }
-    
-    reply_buf.clear();
-    reply_buf.put_u16::<BE>(r.id);
-    reply_buf.put_u16::<BE>(0x8180); // response, recursion
-    reply_buf.put_u16::<BE>(r.q.len() as u16); // q-s
-    reply_buf.put_u16::<BE>(num_answers as u16); // a-s
-    reply_buf.put_u16::<BE>(0); // auth-s
-    reply_buf.put_u16::<BE>(0); // addit
-    for q in &r.q {
-        for l in q.dom.split(".") {
-            reply_buf.put_u8(l.len() as u8);
-            reply_buf.put(l);
-        }
-        reply_buf.put_u8(0x00); // end of name
-        if q.a && q.aaaa {
-            reply_buf.put_u16::<BE>(0x00FF); // All
-        } else if q.a {
-            reply_buf.put_u16::<BE>(0x0001); // A
-        } else if q.aaaa {
-            reply_buf.put_u16::<BE>(0x001C); // AAAA
-        } else {
-            println!("?");
-            reply_buf.put_u16::<BE>(0x0000);
-        }
-        reply_buf.put_u16::<BE>(0x0001); // IN
-    }
-    for (dom, a) in ans_a {
-        for ip in a {
-            for l in dom.split(".") {
-                reply_buf.put_u8(l.len() as u8); // < 64
-                reply_buf.put(l);
-            }
-            reply_buf.put_u8(0x00); // end of name
-            reply_buf.put_u16::<BE>(0x0001); // A
-            reply_buf.put_u16::<BE>(0x0001); // IN
-            reply_buf.put_u32::<BE>(3600); // TTL
-            reply_buf.put_u16::<BE>(4); // data len
-            reply_buf.put(&ip.octets()[..]);
-        }
-    }
-    for (dom, aaaa) in ans_aaaa {
-        for ip6 in aaaa {
-            for l in dom.split(".") {
-                reply_buf.put_u8(l.len() as u8); // < 64
-                reply_buf.put(l);
-            }
-            reply_buf.put_u8(0x00); // end of name
-            reply_buf.put_u16::<BE>(0x001C); // A
-            reply_buf.put_u16::<BE>(0x0001); // IN
-            reply_buf.put_u32::<BE>(3600); // TTL
-            reply_buf.put_u16::<BE>(16); // data len
-            reply_buf.put(&ip6.octets()[..]);
-        }
-    }
-    
-    s.send_to(&reply_buf[..], &r.sa)?;
+    send_dns_reply(s, &mut tmp.reply_buf, r, &ans_a, &ans_aaaa)?;
     Ok(TryAnswerRequestResult::Resolved)
 }
 
@@ -167,7 +187,7 @@ struct ProgState {
     s : UdpSocket,
     buf: [u8; 1600],
     amt: usize,
-    reply_buf: Vec<u8>,
+    tmp: ScratchSpace,
     r2a: HashMap<u16, SocketAddr>,
     upstream : SocketAddr,
 }
@@ -248,7 +268,7 @@ impl ProgState {
         if let UnknownsRemain(x) = try_answer_request(
                                         &mut self.db,
                                         &self.s, 
-                                        &mut self.reply_buf, 
+                                        &mut self.tmp, 
                                         &r
                         )? {
             println!("Unknowns remain: {}", x);
@@ -279,7 +299,12 @@ fn run() -> BoxResult<()> {
     let mut r2a : HashMap<u16, SocketAddr> = HashMap::new();
     
     let mut buf = [0; 1600];
-    let mut reply_buf = Vec::with_capacity(1600);
+    
+    let mut tmp = ScratchSpace {
+        reply_buf: Vec::with_capacity(1600),
+        ans_a: Vec::with_capacity(20),
+        ans_aaaa: Vec::with_capacity(20),
+    };
     
     let mut ps = ProgState {
         db,
@@ -287,7 +312,7 @@ fn run() -> BoxResult<()> {
         upstream,
         r2a,
         buf,
-        reply_buf,
+        tmp,
         amt: 0,
     };
     
