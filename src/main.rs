@@ -65,7 +65,8 @@ fn send_dns_reply(
                 ans_aaaa: &Vec<(String, Vec<(Ipv6Addr, Ttl)>)>,
                 ) -> BoxResult<()> {
     
-    let mut num_answers = ans_a.len() + ans_aaaa.len();
+    let mut num_answers = ans_a   .iter().fold(0, |a,x|a+x.1.len())
+                        + ans_aaaa.iter().fold(0, |a,x|a+x.1.len());
     if num_answers > 65535 { num_answers=65535; } // XXX
     
     let mut reply_buf = Vec::with_capacity(600);
