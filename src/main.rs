@@ -55,16 +55,8 @@ struct SimplifiedRequest {
     unknowns_remain: usize,
 }
 
-
-struct ScratchSpace {
-    reply_buf: Vec<u8>,
-    ans_a:    Vec<(String, Vec<Ipv4Addr>)>,
-    ans_aaaa: Vec<(String, Vec<Ipv6Addr>)>,
-}
-
 fn send_dns_reply(
                 s : &UdpSocket, 
-                reply_buf:&mut Vec<u8>, 
                 r: &SimplifiedRequest,
                 ans_a:    &Vec<(String, Vec<Ipv4Addr>)>,
                 ans_aaaa: &Vec<(String, Vec<Ipv6Addr>)>,
@@ -73,7 +65,7 @@ fn send_dns_reply(
     let mut num_answers = ans_a.len() + ans_aaaa.len();
     if num_answers > 65535 { num_answers=65535; } // XXX
     
-    reply_buf.clear();
+    let mut reply_buf = Vec::with_capacity(600);
     reply_buf.put_u16::<BE>(r.id);
     reply_buf.put_u16::<BE>(0x8180); // response, recursion, recursion
     reply_buf.put_u16::<BE>(r.q.len() as u16); // q-s
@@ -139,14 +131,13 @@ enum TryAnswerRequestResult {
 fn try_answer_request(
                 db : &mut DB,
                 s : &UdpSocket,
-                tmp: &mut ScratchSpace,
                 r: &SimplifiedRequest
                 ) -> BoxResult<TryAnswerRequestResult> {
     
     let mut num_unknowns = 0;
     
-    let mut ans_a = &mut tmp.ans_a;
-    let mut ans_aaaa = &mut tmp.ans_aaaa;
+    let mut ans_a = Vec::with_capacity(4);
+    let mut ans_aaaa = Vec::with_capacity(4);
     ans_a.clear();
     ans_aaaa.clear();
     
@@ -179,18 +170,21 @@ fn try_answer_request(
     if num_unknowns > 0 { 
         return Ok(TryAnswerRequestResult::UnknownsRemain(num_unknowns));
     }
-    send_dns_reply(s, &mut tmp.reply_buf, r, &ans_a, &ans_aaaa)?;
+    send_dns_reply(s, r, &ans_a, &ans_aaaa)?;
     Ok(TryAnswerRequestResult::Resolved)
 }
 
+type UnrepliedRequests = CompactMap<SimplifiedRequest>;
+type DomUpdateSubstriptions = HashMap<usize, usize>;
 struct ProgState {
     db : DB,
     s : UdpSocket,
     buf: [u8; 1600],
     amt: usize,
-    tmp: ScratchSpace,
     r2a: HashMap<u16, SocketAddr>,
     upstream : SocketAddr,
+    
+    //unreplied_requests: UnrepliedRequests,
 }
 
 impl ProgState {
@@ -269,7 +263,6 @@ impl ProgState {
         if let UnknownsRemain(x) = try_answer_request(
                                         &mut self.db,
                                         &self.s, 
-                                        &mut self.tmp, 
                                         &r
                         )? {
             println!("Unknowns remain: {}", x);
@@ -301,19 +294,12 @@ fn run() -> BoxResult<()> {
     
     let mut buf = [0; 1600];
     
-    let mut tmp = ScratchSpace {
-        reply_buf: Vec::with_capacity(1600),
-        ans_a: Vec::with_capacity(20),
-        ans_aaaa: Vec::with_capacity(20),
-    };
-    
     let mut ps = ProgState {
         db,
         s,
         upstream,
         r2a,
         buf,
-        tmp,
         amt: 0,
     };
     
