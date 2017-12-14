@@ -9,6 +9,7 @@ extern crate serde_derive;
 extern crate serde_cbor;
 extern crate rusty_leveldb;
 extern crate bytes;
+extern crate multimap;
 
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
 use dns_parser::Packet;
@@ -22,6 +23,7 @@ use std::io::Cursor;
 use bytes::{BufMut,BigEndian as BE};
 use serde_cbor::de::from_slice;
 use serde_cbor::ser::to_vec;
+use multimap::MultiMap;
 
 type CacheId = usize;
 type Time = u64;
@@ -174,8 +176,11 @@ fn try_answer_request(
     Ok(TryAnswerRequestResult::Resolved)
 }
 
+
 type UnrepliedRequests = CompactMap<SimplifiedRequest>;
-type DomUpdateSubstriptions = HashMap<usize, usize>;
+type UnrepliedRequestId = usize;
+type DomUpdateSubstriptions = MultiMap<String, UnrepliedRequestId>;
+
 struct ProgState {
     db : DB,
     s : UdpSocket,
@@ -184,20 +189,25 @@ struct ProgState {
     r2a: HashMap<u16, SocketAddr>,
     upstream : SocketAddr,
     
-    //unreplied_requests: UnrepliedRequests,
+    unreplied_requests: UnrepliedRequests,
+    dom_update_subscriptions: DomUpdateSubstriptions,
 }
 
 impl ProgState {
     fn from_upstream(&mut self) -> BoxResult<()> {
         //println!("reply: {:?}", p);
-        println!("reply from upstream");
         
         let buf = &self.buf[..self.amt];
         let p = Packet::parse(buf)?;
         
         if let Some(ca) = self.r2a.remove(&p.header.id) {
+            println!("  direct reply");
             self.s.send_to(&buf, &ca)?;
+            return Ok(());
         }
+        
+        println!("  reply");
+        
         Ok(())
     }
     
@@ -223,7 +233,7 @@ impl ProgState {
             }
             
             let dom = q.qname.to_string();
-            println!("{:?}\t{}", q.qtype, dom);
+            print!("{:?}\t{}", q.qtype, dom);
             let sq = SimplifiedQuestion {
                 dom,
                 a:    q.qtype == A    || q.qtype == QTAll,
@@ -233,9 +243,11 @@ impl ProgState {
         }
         
         if weird_querty {
-            println!("Weird request {:?}",p);
+            println!("  direct");
+            //println!("Weird request {:?}",p);
             self.r2a.insert(p.header.id, src);
             self.s.send_to(&buf, &self.upstream)?;
+            return Ok(());
         }
         
         let r = SimplifiedRequest {
@@ -245,6 +257,28 @@ impl ProgState {
             unknowns_remain: 0,
         };
         
+        use TryAnswerRequestResult::*;
+        if let Resolved = try_answer_request(
+                                        &mut self.db,
+                                        &self.s, 
+                                        &r
+                                )? {
+            println!("  cached");
+            return Ok(());
+        }
+        
+        println!("  queued");
+        
+        let id = self.unreplied_requests.insert(r);
+        let r = self.unreplied_requests.get(id).unwrap();
+        
+        for ref q in &r.q {
+            self.dom_update_subscriptions.insert(q.dom.clone(), id);
+        }
+        // Send to upstream as is.
+        self.s.send_to(&buf, &self.upstream)?;
+        Ok(())
+        /*
         for q in &r.q {
             if let None = self.db.get(q.dom.as_bytes()) {
                 let ce = CacheEntry {
@@ -257,17 +291,7 @@ impl ProgState {
                 self.db.flush()?;
                 println!("Saved to database: {}", q.dom);
             }
-        }
-        
-        use TryAnswerRequestResult::UnknownsRemain;
-        if let UnknownsRemain(x) = try_answer_request(
-                                        &mut self.db,
-                                        &self.s, 
-                                        &r
-                        )? {
-            println!("Unknowns remain: {}", x);
-        }
-        Ok(())
+        }*/
     }
 
     fn serve1(&mut self) -> BoxResult<()> {
@@ -301,6 +325,8 @@ fn run() -> BoxResult<()> {
         r2a,
         buf,
         amt: 0,
+        unreplied_requests: CompactMap::new(),
+        dom_update_subscriptions: MultiMap::new(),
     };
     
     loop {
