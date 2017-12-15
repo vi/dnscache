@@ -36,11 +36,14 @@ type Time = u64;
 type BoxResult<T> = Result<T,Box<std::error::Error>>;
 type Ttl = u32;
 
+type Ipv4AddrB = [u8; 4];
+type Ipv6AddrB = [u8; 16];
+
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 struct CacheEntry {
-    a: Option<Vec<(Ipv4Addr,Ttl)>>, // None - unqueried
-    aaaa: Option<Vec<(Ipv6Addr, Ttl)>>,
-    obtained : Time,
+    a4: Option<Vec<(Ipv4AddrB,Ttl)>>, // None - unqueried
+    a6: Option<Vec<(Ipv6AddrB,Ttl)>>,
+    t : Time,
 }
 
 struct RequestToUs {
@@ -51,8 +54,8 @@ struct RequestToUs {
 
 struct SimplifiedQuestion {
     dom: String,
-    a: bool,
-    aaaa: bool,
+    a4: bool,
+    a6: bool,
 }
 struct SimplifiedRequest {
     id : u16,
@@ -64,8 +67,8 @@ struct SimplifiedRequest {
 fn send_dns_reply(
                 s : &UdpSocket, 
                 r: &SimplifiedRequest,
-                ans_a:    &Vec<(String, Vec<(Ipv4Addr, Ttl)>)>,
-                ans_aaaa: &Vec<(String, Vec<(Ipv6Addr, Ttl)>)>,
+                ans_a:    &Vec<(String, Vec<(Ipv4AddrB, Ttl)>)>,
+                ans_aaaa: &Vec<(String, Vec<(Ipv6AddrB, Ttl)>)>,
                 ) -> BoxResult<()> {
     
     let mut num_answers = ans_a   .iter().fold(0, |a,x|a+x.1.len())
@@ -85,11 +88,11 @@ fn send_dns_reply(
             reply_buf.put(l);
         }
         reply_buf.put_u8(0x00); // end of name
-        if q.a && q.aaaa {
+        if q.a4 && q.a6 {
             reply_buf.put_u16::<BE>(0x00FF); // All
-        } else if q.a {
+        } else if q.a4 {
             reply_buf.put_u16::<BE>(0x0001); // A
-        } else if q.aaaa {
+        } else if q.a6 {
             reply_buf.put_u16::<BE>(0x001C); // AAAA
         } else {
             println!("?");
@@ -98,7 +101,7 @@ fn send_dns_reply(
         reply_buf.put_u16::<BE>(0x0001); // IN
     }
     for &(ref dom, ref a) in ans_a {
-        for &(ip, ttl) in a {
+        for &(ip4, ttl) in a {
             for l in dom.split(".") {
                 reply_buf.put_u8(l.len() as u8); // < 64
                 reply_buf.put(l);
@@ -109,7 +112,7 @@ fn send_dns_reply(
             // FIXME: adjust TTL based on time it lived in the cache
             reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(4); // data len
-            reply_buf.put(&ip.octets()[..]);
+            reply_buf.put(&ip4[..]);
         }
     }
     for &(ref dom, ref aaaa) in ans_aaaa {
@@ -124,7 +127,7 @@ fn send_dns_reply(
             // FIXME: adjust TTL based on time it lived in the cache
             reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(16); // data len
-            reply_buf.put(&ip6.octets()[..]);
+            reply_buf.put(&ip6[..]);
         }
     }
     
@@ -145,27 +148,25 @@ fn try_answer_request(
     
     let mut num_unknowns = 0;
     
-    let mut ans_a = Vec::with_capacity(4);
-    let mut ans_aaaa = Vec::with_capacity(4);
-    ans_a.clear();
-    ans_aaaa.clear();
+    let mut ans_a4 = Vec::with_capacity(4);
+    let mut ans_a6 = Vec::with_capacity(4);
     
     for q in &r.q {
-        assert!(q.a || q.aaaa);
+        assert!(q.a4 || q.a6);
         if let Some(ceb) = db.get(q.dom.as_bytes()) {
             let ce : CacheEntry = from_slice(&ceb[..])?;
-            if q.a {
-                if let Some(a) = ce.a {
-                    ans_a.push((q.dom.clone(), a));
+            if q.a4 {
+                if let Some(a4) = ce.a4 {
+                    ans_a4.push((q.dom.clone(), a4));
                 } else {
                     num_unknowns += 1;
                     continue;
                 }
             }
             
-            if q.aaaa {
-                if let Some(aaaa) = ce.aaaa {
-                    ans_aaaa.push((q.dom.clone(), aaaa));
+            if q.a6 {
+                if let Some(a6) = ce.a6 {
+                    ans_a6.push((q.dom.clone(), a6));
                 } else {
                     num_unknowns += 1;
                     continue;
@@ -179,7 +180,7 @@ fn try_answer_request(
     if num_unknowns > 0 { 
         return Ok(TryAnswerRequestResult::UnknownsRemain(num_unknowns));
     }
-    send_dns_reply(s, r, &ans_a, &ans_aaaa)?;
+    send_dns_reply(s, r, &ans_a4, &ans_a6)?;
     Ok(TryAnswerRequestResult::Resolved)
 }
 
@@ -203,7 +204,7 @@ struct ProgState {
 impl ProgState {
     fn from_upstream(&mut self) -> BoxResult<()> {
         //println!("reply: {:?}", p);
-        
+        println!("  upstream");
         let buf = &self.buf[..self.amt];
         let p = Packet::parse(buf)?;
         
@@ -231,19 +232,19 @@ impl ProgState {
             if ans.cls != dns_parser::Class::IN { continue; }
             
             let ce = tmp.entry(dom).or_insert(Default::default());
-            ce.obtained = now;
+            ce.t = now;
             
             use dns_parser::RRData;
             match ans.data {
                 RRData::A(ip4)    => {
-                    if ce.a == None { ce.a = Some(Vec::new()); }
-                    let v = ce.a.as_mut().unwrap();
-                    v.push((ip4, ans.ttl));
+                    if ce.a4 == None { ce.a4 = Some(Vec::new()); }
+                    let v = ce.a4.as_mut().unwrap();
+                    v.push((ip4.octets(), ans.ttl));
                 }
                 RRData::AAAA(ip6) => {
-                    if ce.aaaa == None { ce.aaaa = Some(Vec::new()); }
-                    let v = ce.aaaa.as_mut().unwrap();
-                    v.push((ip6, ans.ttl));
+                    if ce.a6 == None { ce.a6 = Some(Vec::new()); }
+                    let v = ce.a6.as_mut().unwrap();
+                    v.push((ip6.octets(), ans.ttl));
                 }
                 _ => continue,
             }
@@ -258,11 +259,11 @@ impl ProgState {
                 cached = Default::default();
             }
             
-            if entry.a.is_none() && cached.a.is_some() {
-                entry.a = cached.a;
+            if entry.a4.is_none() && cached.a4.is_some() {
+                entry.a4 = cached.a4;
             }
-            if entry.aaaa.is_none() && cached.aaaa.is_some() {
-                entry.aaaa = cached.aaaa;
+            if entry.a6.is_none() && cached.a6.is_some() {
+                entry.a6 = cached.a6;
             }
 
             self.db.put(dom.as_bytes(), &to_vec(&entry)?[..])?;
@@ -331,8 +332,8 @@ impl ProgState {
             print!("{:?}\t{}", q.qtype, dom);
             let sq = SimplifiedQuestion {
                 dom,
-                a:    q.qtype == A    || q.qtype == QTAll,
-                aaaa: q.qtype == AAAA || q.qtype == QTAll,
+                a4: q.qtype == A    || q.qtype == QTAll,
+                a6: q.qtype == AAAA || q.qtype == QTAll,
             };
             simplified_questions.push(sq);
         }
@@ -406,8 +407,8 @@ fn run() -> BoxResult<()> {
     let dbopts : rusty_leveldb::Options = Default::default();
     let db = DB::open("./db", dbopts)?;
 
-    let s = UdpSocket::bind("0.0.0.0:3553")?;
-    let upstream : SocketAddr = "8.8.8.8:53".parse()?;
+    let s = UdpSocket::bind("0.0.0.0:53")?;
+    let upstream : SocketAddr = "127.0.0.1:6053".parse()?;
     
     let mut r2a : HashMap<u16, SocketAddr> = HashMap::new();
     
