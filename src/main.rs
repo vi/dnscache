@@ -10,6 +10,9 @@ extern crate serde_cbor;
 extern crate rusty_leveldb;
 extern crate bytes;
 extern crate multimap;
+extern crate structopt;
+#[macro_use]
+extern crate structopt_derive;
 
 // TODO: negative cache
 // TODO: re-requesting stale data
@@ -29,6 +32,26 @@ use serde_cbor::de::from_slice;
 use serde_cbor::ser::to_vec;
 use multimap::MultiMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use structopt::StructOpt;
+use std::num::ParseIntError;
+use std::path::PathBuf;
+
+#[derive(StructOpt, Debug)]
+#[structopt(name = "dnscache", about = "Simple DNS cacher.")]
+struct Opt {
+    #[structopt(short = "v", long = "verbose", help = "Initialize envlogger")]
+    debug: bool,
+
+    #[structopt(help = "Listen address and port")]
+    listen_addr: SocketAddr,
+    
+    #[structopt(help = "Upstream DNS server address and port")]
+    upstream_addr: SocketAddr,
+
+    #[structopt(help = "Path to LevelDB database directory", parse(from_os_str))]
+    db: PathBuf,
+}
+
 
 type CacheId = usize;
 type Time = u64;
@@ -402,13 +425,13 @@ impl ProgState {
     }
 }
 
-fn run() -> BoxResult<()> {
+fn run(opt: Opt) -> BoxResult<()> {
 
     let dbopts : rusty_leveldb::Options = Default::default();
-    let db = DB::open("./db", dbopts)?;
+    let db = DB::open(opt.db.to_str().expect("rusty-leveldb opens only UTF-8 paths"), dbopts)?;
 
-    let s = UdpSocket::bind("0.0.0.0:53")?;
-    let upstream : SocketAddr = "127.0.0.1:6053".parse()?;
+    let s = UdpSocket::bind(opt.listen_addr)?;
+    let upstream = opt.upstream_addr;
     
     let mut r2a : HashMap<u16, SocketAddr> = HashMap::new();
     
@@ -433,7 +456,8 @@ fn run() -> BoxResult<()> {
 }
 
 fn main() {
-    if let Err(e) = run() {
+    let opt = Opt::from_args();
+    if let Err(e) = run(opt) {
         eprintln!("error: {}", e);
         std::process::exit(1);
     }

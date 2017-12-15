@@ -11,4 +11,6 @@ serde = { version = "1" }
 serde_cbor = { version = "0.6" }
 serde_derive = { version = "1" }
 rusty-leveldb = { version = "0.1" }
-multimap = "0.4.0"
+multimap = "0.4"
+structopt = "0.1"
+structopt-derive = "0.1"
