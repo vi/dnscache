@@ -337,6 +337,10 @@ impl ProgState {
         
         let mut simplified_questions = Vec::with_capacity(1);
         
+        if p.questions.len() > 1 {
+            println!("A query with {} questions:", p.questions.len());
+        } 
+        
         for q in &p.questions {
             match q.qclass {
                 IN  |
