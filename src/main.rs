@@ -81,6 +81,7 @@ struct SimplifiedRequest {
     id : u16,
     sa : SocketAddr,
     q: Vec<SimplifiedQuestion>,
+    t: Time,
 }
 
 fn send_dns_reply(
@@ -157,6 +158,7 @@ fn send_dns_reply(
 
 enum TryAnswerRequestResult {
     Resolved,
+    ResolvedButNeedsRefresh,
     UnknownsRemain(usize),
 }
 fn try_answer_request(
@@ -255,6 +257,7 @@ impl ProgState {
         }
         
         // now we are decided to save things and reply
+        
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         
         // 3. build a list of new entries
@@ -329,7 +332,7 @@ impl ProgState {
             let mut unhappy = Vec::new();
             let mut happy = Vec::new();
             for sub_id in subs {
-                use TryAnswerRequestResult::Resolved;
+                use TryAnswerRequestResult::*;
                 if let Some(r) = self.unreplied_requests.get(sub_id) {
                     match try_answer_request(
                                     &mut self.db,
@@ -340,7 +343,11 @@ impl ProgState {
                             println!("  replied");
                             happy.push(sub_id);
                         }
-                        _ => {
+                        ResolvedButNeedsRefresh => {
+                            println!("  replied?");
+                            happy.push(sub_id);
+                        }
+                        UnknownsRemain(_) => {
                             unhappy.push(sub_id);
                         }
                     }
@@ -403,23 +410,31 @@ impl ProgState {
             return Ok(());
         }
         
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        
         let r = SimplifiedRequest {
             id : p.header.id,
             q : simplified_questions,
             sa: src,
+            t: now,
         };
         
         use TryAnswerRequestResult::*;
-        if let Resolved = try_answer_request(
-                                        &mut self.db,
-                                        &self.s, 
-                                        &r
-                                )? {
-            println!("  cached");
-            return Ok(());
-        }
+        let result = try_answer_request(&mut self.db, &self.s, &r)?;
         
-        println!("  queued");
+        match result {
+            Resolved => {
+                println!("  cached");
+                return Ok(());
+            }
+            ResolvedButNeedsRefresh => {
+                println!("  cached, but refreshing");
+                return Ok(());
+            }
+            UnknownsRemain(_) => {
+                println!("  queued");
+            }
+        }
         
         let id = self.unreplied_requests.insert(r);
         let r = self.unreplied_requests.get(id).unwrap();
@@ -430,20 +445,6 @@ impl ProgState {
         // Send to upstream as is.
         self.s.send_to(&buf, &self.upstream)?;
         Ok(())
-        /*
-        for q in &r.q {
-            if let None = self.db.get(q.dom.as_bytes()) {
-                let ce = CacheEntry {
-                    a:    Some(vec!["127.1.2.3".parse()?]),
-                    aaaa: Some(vec!["23::44".parse()?]),
-                    obtained: 123,
-                    ttl: Default::default(),
-                };
-                self.db.put(q.dom.as_bytes(), &to_vec(&ce)?[..])?;
-                self.db.flush()?;
-                println!("Saved to database: {}", q.dom);
-            }
-        }*/
     }
 
     fn serve1(&mut self) -> BoxResult<()> {
