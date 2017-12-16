@@ -71,13 +71,13 @@ struct SimplifiedRequest {
 fn send_dns_reply(
                 s : &UdpSocket, 
                 r: &SimplifiedRequest,
-                ans_a:    &Vec<(String, Vec<(Ipv4AddrB, Ttl)>)>,
-                ans_aaaa: &Vec<(String, Vec<(Ipv6AddrB, Ttl)>)>,
+                ans_a:    &[(String, Vec<(Ipv4AddrB, Ttl)>)],
+                ans_aaaa: &[(String, Vec<(Ipv6AddrB, Ttl)>)],
                 ) -> BoxResult<()> {
     
     let mut num_answers = ans_a   .iter().fold(0, |a,x|a+x.1.len())
                         + ans_aaaa.iter().fold(0, |a,x|a+x.1.len());
-    if num_answers > 65535 { num_answers=65535; } // XXX
+    if num_answers > 0xFFFF { num_answers=0xFFFF; } // XXX
     
     let mut reply_buf = Vec::with_capacity(600);
     reply_buf.put_u16::<BE>(r.id);
@@ -86,12 +86,17 @@ fn send_dns_reply(
     reply_buf.put_u16::<BE>(num_answers as u16); // a-s
     reply_buf.put_u16::<BE>(0); // auth-s
     reply_buf.put_u16::<BE>(0); // addit
-    for q in &r.q {
-        for l in q.dom.split(".") {
-            reply_buf.put_u8(l.len() as u8); // XXX
+    
+    fn putname(reply_buf: &mut Vec<u8>, dom: &str) {
+        for l in dom.split('.') {
+            reply_buf.put_u8(l.len() as u8);
             reply_buf.put(l);
         }
-        reply_buf.put_u8(0x00); // end of name
+        reply_buf.put_u8(0x00);
+    }
+    
+    for q in &r.q {
+        putname(&mut reply_buf, q.dom.as_str());
         if q.a4 && q.a6 {
             reply_buf.put_u16::<BE>(0x00FF); // All
         } else if q.a4 {
@@ -106,11 +111,7 @@ fn send_dns_reply(
     }
     for &(ref dom, ref a) in ans_a {
         for &(ip4, ttl) in a {
-            for l in dom.split(".") {
-                reply_buf.put_u8(l.len() as u8); // < 64
-                reply_buf.put(l);
-            }
-            reply_buf.put_u8(0x00); // end of name
+            putname(&mut reply_buf, dom);
             reply_buf.put_u16::<BE>(0x0001); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
             // FIXME: adjust TTL based on time it lived in the cache
@@ -121,11 +122,7 @@ fn send_dns_reply(
     }
     for &(ref dom, ref aaaa) in ans_aaaa {
         for &(ip6, ttl) in aaaa {
-            for l in dom.split(".") {
-                reply_buf.put_u8(l.len() as u8); // < 64
-                reply_buf.put(l);
-            }
-            reply_buf.put_u8(0x00); // end of name
+            putname(&mut reply_buf, dom.as_str());
             reply_buf.put_u16::<BE>(0x001C); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
             // FIXME: adjust TTL based on time it lived in the cache
@@ -152,12 +149,12 @@ enum AdjustTtlResult {
     Negative(u64),
 }
 
-fn adjust_ttl<T:Copy+Clone>(v: &Vec<(T, Ttl)>, now: Time, then: Time) -> (AdjustTtlResult, Vec<(T, Ttl)>){
+fn adjust_ttl<T:Copy+Clone>(v: &[(T, Ttl)], now: Time, then: Time) -> (AdjustTtlResult, Vec<(T, Ttl)>){
     let mut vv = Vec::with_capacity(v.len());
     let mut result = AdjustTtlResult::Ok;
     for &(x, ttl) in v {
         let newttl;
-        if now.saturating_sub(then) >= ttl as u64 {
+        if now.saturating_sub(then) >= u64::from(ttl) {
             newttl = 0;
             result = AdjustTtlResult::Expired;
         } else {
@@ -165,7 +162,7 @@ fn adjust_ttl<T:Copy+Clone>(v: &Vec<(T, Ttl)>, now: Time, then: Time) -> (Adjust
         }
         vv.push((x, newttl));
     }
-    if v.len() == 0 {
+    if v.is_empty() {
         result = AdjustTtlResult::Negative(now.saturating_sub(then));
     }
     (result, vv)
@@ -244,7 +241,7 @@ struct ProgState {
 }
 
 impl ProgState {
-    fn from_upstream(&mut self) -> BoxResult<()> {
+    fn packet_from_upstream(&mut self) -> BoxResult<()> {
         //println!("reply: {:?}", p);
         println!("  upstream");
         let buf = &self.buf[..self.amt];
@@ -254,7 +251,7 @@ impl ProgState {
         
         if let Some(ca) = self.r2a.remove(&p.header.id) {
             println!("  direct reply");
-            self.s.send_to(&buf, &ca)?;
+            self.s.send_to(buf, &ca)?;
             return Ok(());
         }
         
@@ -289,7 +286,7 @@ impl ProgState {
             if q.qclass != IN { continue; }
             let dom = q.qname.to_string();
             
-            let ce = tmp.entry(dom).or_insert(Default::default());
+            let ce = tmp.entry(dom).or_insert_with(Default::default);
             
             if q.qtype == A    || q.qtype == QTAll {
                 ce.a4 = Some((now, Vec::new()));
@@ -303,7 +300,7 @@ impl ProgState {
             let dom = ans.name.to_string();
             if ans.cls != dns_parser::Class::IN { continue; }
             
-            let ce = tmp.entry(dom).or_insert(Default::default());
+            let ce = tmp.entry(dom).or_insert_with(Default::default);
             
             use dns_parser::RRData;
             match ans.data {
@@ -323,7 +320,7 @@ impl ProgState {
         
         // 4. save entries to the database, maybe merging with old entries
         
-        for (dom, mut entry) in tmp.iter_mut() {
+        for (dom, mut entry) in &mut tmp {
             
             let cached : CacheEntry;
             if let Some(ceb) = self.db.get(dom.as_bytes()) {
@@ -391,7 +388,7 @@ impl ProgState {
             for id in happy {
                 let _ = self.unreplied_requests.remove(id);
             }
-            if unhappy.len() > 0 {
+            if !unhappy.is_empty() {
                 self.dom_update_subscriptions.entry(dom).or_insert_vec(unhappy);
             }
         }
@@ -399,7 +396,7 @@ impl ProgState {
         Ok(())
     }
     
-    fn from_client(&mut self, src: SocketAddr) -> BoxResult<()> {
+    fn packet_from_client(&mut self, src: SocketAddr) -> BoxResult<()> {
         let buf = &self.buf[..self.amt];
         let p = Packet::parse(buf)?;
         //println!("request {:?}", p);
@@ -439,7 +436,7 @@ impl ProgState {
             println!("  direct");
             //println!("Weird requestnow >= then && now - then {:?}",p);
             self.r2a.insert(p.header.id, src);
-            self.s.send_to(&buf, &self.upstream)?;
+            self.s.send_to(buf, &self.upstream)?;
             return Ok(());
         }
         
@@ -481,11 +478,11 @@ impl ProgState {
         let id = self.unreplied_requests.insert(r);
         let r = self.unreplied_requests.get(id).unwrap();
         
-        for ref q in &r.q {
+        for q in &r.q {
             self.dom_update_subscriptions.insert(q.dom.clone(), id);
         }
         // Send to upstream as is.
-        self.s.send_to(&buf, &self.upstream)?;
+        self.s.send_to(buf, &self.upstream)?;
         Ok(())
     }
 
@@ -493,15 +490,15 @@ impl ProgState {
         let (amt, src) = self.s.recv_from(&mut self.buf)?;
         self.amt = amt;
         if src == self.upstream {
-            self.from_upstream()?;
+            self.packet_from_upstream()?;
         } else {
-            self.from_client(src)?;
+            self.packet_from_client(src)?;
         }
         Ok(())
     }
 }
 
-fn run(opt: Opt) -> BoxResult<()> {
+fn run(opt: &Opt) -> BoxResult<()> {
     let dbopts : rusty_leveldb::Options = Default::default();
     let db = DB::open(opt.db.to_str().expect("rusty-leveldb opens only UTF-8 paths"), dbopts)?;
 
@@ -533,7 +530,7 @@ fn run(opt: Opt) -> BoxResult<()> {
 
 fn main() {
     let opt = Opt::from_args();
-    if let Err(e) = run(opt) {
+    if let Err(e) = run(&opt) {
         eprintln!("error: {}", e);
         std::process::exit(1);
     }
