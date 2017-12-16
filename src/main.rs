@@ -14,8 +14,7 @@ extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
 
-// TODO: negative cache
-// TODO: re-requesting stale data
+// TODO: handling multiple in-flight refreshes of the same domain
 
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
 use dns_parser::Packet;
