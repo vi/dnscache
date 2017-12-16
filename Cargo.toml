@@ -2,6 +2,9 @@
 name = "dnscache"
 version = "0.1.0"
 authors = ["Vitaly _Vi Shukela <vi0oss@gmail.com>"]
+description = "Simple DNS proxy with forced caching"
+repository = "https://github.com/vi/dnscache"
+license = "MIT/Apache-2.0"
 
 [dependencies]
 dns-parser = { version = "0.7" }
