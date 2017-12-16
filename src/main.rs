@@ -39,9 +39,6 @@ use std::path::PathBuf;
 #[derive(StructOpt, Debug)]
 #[structopt(name = "dnscache", about = "Simple DNS cacher.")]
 struct Opt {
-    #[structopt(short = "v", long = "verbose", help = "Initialize envlogger")]
-    debug: bool,
-
     #[structopt(help = "Listen address and port")]
     listen_addr: SocketAddr,
     
@@ -84,7 +81,6 @@ struct SimplifiedRequest {
     id : u16,
     sa : SocketAddr,
     q: Vec<SimplifiedQuestion>,
-    unknowns_remain: usize,
 }
 
 fn send_dns_reply(
@@ -231,12 +227,24 @@ impl ProgState {
         let buf = &self.buf[..self.amt];
         let p = Packet::parse(buf)?;
         
+        // 1. handle direct replies
+        
         if let Some(ca) = self.r2a.remove(&p.header.id) {
             println!("  direct reply");
             self.s.send_to(&buf, &ca)?;
             return Ok(());
         }
         
+        // 2. check for cache poisoning
+        // TODO: also check id
+        
+        for q in &p.questions {
+            let dom = q.qname.to_string();
+            if !self.dom_update_subscriptions.contains_key(&dom) {
+                println!("  unsolicited reply for {}", dom);
+                return Ok(())
+            }
+        }
         
         for ans in &p.answers {
             let dom = ans.name.to_string();
@@ -246,9 +254,27 @@ impl ProgState {
             }
         }
         
+        // now we are decided to save things and reply
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        
+        // 3. build a list of new entries
+        
         let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
         
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        for q in &p.questions {
+            if q.qclass != IN { continue; }
+            let dom = q.qname.to_string();
+            
+            let ce = tmp.entry(dom).or_insert(Default::default());
+            ce.t = now;
+            
+            if q.qtype == A    || q.qtype == QTAll {
+                ce.a4 = Some(Vec::new());
+            }
+            if q.qtype == AAAA || q.qtype == QTAll {
+                ce.a6 = Some(Vec::new());
+            }
+        }
         
         for ans in &p.answers {
             let dom = ans.name.to_string();
@@ -273,6 +299,8 @@ impl ProgState {
             }
         }
         
+        // 4. save entries to the database, maybe merging with old entries
+        
         for (dom, mut entry) in tmp.iter_mut() {
             
             let cached : CacheEntry;
@@ -293,6 +321,8 @@ impl ProgState {
             println!("  saved to database: {}", dom);
         }
         self.db.flush()?;
+        
+        // 5. Try replying to queued queries
         
         for (dom, _) in tmp {
             let subs = self.dom_update_subscriptions.remove(&dom).unwrap();
@@ -377,7 +407,6 @@ impl ProgState {
             id : p.header.id,
             q : simplified_questions,
             sa: src,
-            unknowns_remain: 0,
         };
         
         use TryAnswerRequestResult::*;
@@ -430,7 +459,6 @@ impl ProgState {
 }
 
 fn run(opt: Opt) -> BoxResult<()> {
-
     let dbopts : rusty_leveldb::Options = Default::default();
     let db = DB::open(opt.db.to_str().expect("rusty-leveldb opens only UTF-8 paths"), dbopts)?;
 
