@@ -7,6 +7,8 @@ Trades consistency for availability. Not for serious use.
 
 License = MIT or Apache 2.0
 
+There are some pre-built versions on Github releases.
+
 ---
 
 ```
