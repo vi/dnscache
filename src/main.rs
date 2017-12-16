@@ -14,8 +14,6 @@ extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
 
-// TODO: handling multiple in-flight refreshes of the same domain
-
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
 use dns_parser::Packet;
 use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
@@ -63,9 +61,8 @@ type Ipv6AddrB = [u8; 16];
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 struct CacheEntry {
-    a4: Option<Vec<(Ipv4AddrB,Ttl)>>, // None - unqueried
-    a6: Option<Vec<(Ipv6AddrB,Ttl)>>,
-    t : Time,
+    a4: Option<(Time,Vec<(Ipv4AddrB,Ttl)>)>, // None - unqueried
+    a6: Option<(Time,Vec<(Ipv6AddrB,Ttl)>)>,
 }
 
 struct RequestToUs {
@@ -164,7 +161,7 @@ enum TryAnswerRequestResult {
     UnknownsRemain(usize),
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq,Debug)]
 enum AdjustTtlResult {
     Ok,
     Expired,
@@ -208,10 +205,9 @@ fn try_answer_request(
         assert!(q.a4 || q.a6);
         if let Some(ceb) = db.get(q.dom.as_bytes()) {
             let ce : CacheEntry = from_slice(&ceb[..])?;
-            let then = ce.t;
             if q.a4 {
                 if let Some(a4) = ce.a4 {
-                    let (tr,a4adj) = adjust_ttl(&a4, now, then);
+                    let (tr,a4adj) = adjust_ttl(&a4.1, now, a4.0);
                     if ttl_status == AdjustTtlResult::Ok { ttl_status = tr }
                     ans_a4.push((q.dom.clone(), a4adj));
                 } else {
@@ -222,7 +218,7 @@ fn try_answer_request(
             
             if q.a6 {
                 if let Some(a6) = ce.a6 {
-                    let (tr,a6adj) = adjust_ttl(&a6, now, then);
+                    let (tr,a6adj) = adjust_ttl(&a6.1, now, a6.0);
                     if ttl_status == AdjustTtlResult::Ok { ttl_status = tr }
                     ans_a6.push((q.dom.clone(), a6adj));
                 } else {
@@ -239,7 +235,9 @@ fn try_answer_request(
     if num_unknowns > 0 { 
         return Ok(TryAnswerRequestResult::UnknownsRemain(num_unknowns));
     }
-    send_dns_reply(s, r, &ans_a4, &ans_a6)?;
+    if ! r.inhibit_send {
+        send_dns_reply(s, r, &ans_a4, &ans_a6)?;
+    }
     Ok(TryAnswerRequestResult::Resolved(ttl_status))
 }
 
@@ -308,13 +306,12 @@ impl ProgState {
             let dom = q.qname.to_string();
             
             let ce = tmp.entry(dom).or_insert(Default::default());
-            ce.t = now;
             
             if q.qtype == A    || q.qtype == QTAll {
-                ce.a4 = Some(Vec::new());
+                ce.a4 = Some((now, Vec::new()));
             }
             if q.qtype == AAAA || q.qtype == QTAll {
-                ce.a6 = Some(Vec::new());
+                ce.a6 = Some((now, Vec::new()));
             }
         }
         
@@ -323,19 +320,18 @@ impl ProgState {
             if ans.cls != dns_parser::Class::IN { continue; }
             
             let ce = tmp.entry(dom).or_insert(Default::default());
-            ce.t = now;
             
             use dns_parser::RRData;
             match ans.data {
                 RRData::A(ip4)    => {
-                    if ce.a4 == None { ce.a4 = Some(Vec::new()); }
+                    if ce.a4 == None { ce.a4 = Some((now, Vec::new())); }
                     let v = ce.a4.as_mut().unwrap();
-                    v.push((ip4.octets(), ans.ttl));
+                    v.1.push((ip4.octets(), ans.ttl));
                 }
                 RRData::AAAA(ip6) => {
-                    if ce.a6 == None { ce.a6 = Some(Vec::new()); }
+                    if ce.a6 == None { ce.a6 = Some((now, Vec::new())); }
                     let v = ce.a6.as_mut().unwrap();
-                    v.push((ip6.octets(), ans.ttl));
+                    v.1.push((ip6.octets(), ans.ttl));
                 }
                 _ => continue,
             }
@@ -373,11 +369,7 @@ impl ProgState {
             for sub_id in subs {
                 use TryAnswerRequestResult::*;
                 if let Some(r) = self.unreplied_requests.get(sub_id) {
-                    if r.inhibit_send {
-                        println!("  refreshed");
-                        happy.push(sub_id);
-                        continue;
-                    }
+                    let dummy_request = r.inhibit_send;
                     let result = try_answer_request(
                                 &mut self.db,
                                 now,
@@ -385,12 +377,20 @@ impl ProgState {
                                 r)?;
                     match result {
                         Resolved(AdjustTtlResult::Ok) => {
-                            println!("  replied.");
+                            if ! dummy_request {
+                                println!("  replied.");
+                            } else {
+                                println!("  refreshed.");
+                            }
                             happy.push(sub_id);
                         }
                         Resolved(AdjustTtlResult::Expired) => {
-                            println!("  replied?");
-                            happy.push(sub_id);
+                            if ! dummy_request {
+                                println!("  replied?");
+                                happy.push(sub_id);
+                            } else {
+                                unhappy.push(sub_id);
+                            }
                         }
                         Resolved(AdjustTtlResult::Negative(_)) => {
                             println!("  replied...");
