@@ -25,6 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use structopt::StructOpt;
 use std::path::PathBuf;
 
+// Implemented by Vitaly "_Vi" Shukela in 2017; Licence = MIT or Apache 2.0
+
 #[derive(StructOpt, Debug)]
 #[structopt(name = "dnscache", about = "Simple DNS cacher.")]
 struct Opt {
