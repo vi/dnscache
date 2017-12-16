@@ -17,6 +17,8 @@ extern crate structopt_derive;
 // TODO: negative cache
 // TODO: re-requesting stale data
 
+const NEG_TTL : u64 = 3;
+
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
 use dns_parser::Packet;
 use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
@@ -82,6 +84,7 @@ struct SimplifiedRequest {
     sa : SocketAddr,
     q: Vec<SimplifiedQuestion>,
     t: Time,
+    inhibit_send: bool,
 }
 
 fn send_dns_reply(
@@ -157,12 +160,39 @@ fn send_dns_reply(
 
 
 enum TryAnswerRequestResult {
-    Resolved,
-    ResolvedButNeedsRefresh,
+    Resolved(AdjustTtlResult),
     UnknownsRemain(usize),
 }
+
+#[derive(PartialEq)]
+enum AdjustTtlResult {
+    Ok,
+    Expired,
+    Negative(u64),
+}
+
+fn adjust_ttl<T:Copy+Clone>(v: &Vec<(T, Ttl)>, now: Time, then: Time) -> (AdjustTtlResult, Vec<(T, Ttl)>){
+    let mut vv = Vec::with_capacity(v.len());
+    let mut result = AdjustTtlResult::Ok;
+    for &(x, ttl) in v {
+        let newttl;
+        if now.saturating_sub(then) >= ttl as u64 {
+            newttl = 0;
+            result = AdjustTtlResult::Expired;
+        } else {
+            newttl = ttl.saturating_sub(now.saturating_sub(then) as u32);
+        }
+        vv.push((x, newttl));
+    }
+    if v.len() == 0 {
+        result = AdjustTtlResult::Negative(now.saturating_sub(then));
+    }
+    (result, vv)
+}
+
 fn try_answer_request(
                 db : &mut DB,
+                now : Time,
                 s : &UdpSocket,
                 r: &SimplifiedRequest
                 ) -> BoxResult<TryAnswerRequestResult> {
@@ -172,13 +202,18 @@ fn try_answer_request(
     let mut ans_a4 = Vec::with_capacity(4);
     let mut ans_a6 = Vec::with_capacity(4);
     
+    let mut ttl_status = AdjustTtlResult::Ok;
+    
     for q in &r.q {
         assert!(q.a4 || q.a6);
         if let Some(ceb) = db.get(q.dom.as_bytes()) {
             let ce : CacheEntry = from_slice(&ceb[..])?;
+            let then = ce.t;
             if q.a4 {
                 if let Some(a4) = ce.a4 {
-                    ans_a4.push((q.dom.clone(), a4));
+                    let (tr,a4adj) = adjust_ttl(&a4, now, then);
+                    if ttl_status == AdjustTtlResult::Ok { ttl_status = tr }
+                    ans_a4.push((q.dom.clone(), a4adj));
                 } else {
                     num_unknowns += 1;
                     continue;
@@ -187,12 +222,15 @@ fn try_answer_request(
             
             if q.a6 {
                 if let Some(a6) = ce.a6 {
-                    ans_a6.push((q.dom.clone(), a6));
+                    let (tr,a6adj) = adjust_ttl(&a6, now, then);
+                    if ttl_status == AdjustTtlResult::Ok { ttl_status = tr }
+                    ans_a6.push((q.dom.clone(), a6adj));
                 } else {
                     num_unknowns += 1;
                     continue;
                 }
             }
+
         } else {
             num_unknowns += 1;
         }
@@ -202,7 +240,7 @@ fn try_answer_request(
         return Ok(TryAnswerRequestResult::UnknownsRemain(num_unknowns));
     }
     send_dns_reply(s, r, &ans_a4, &ans_a6)?;
-    Ok(TryAnswerRequestResult::Resolved)
+    Ok(TryAnswerRequestResult::Resolved(ttl_status))
 }
 
 
@@ -334,17 +372,27 @@ impl ProgState {
             for sub_id in subs {
                 use TryAnswerRequestResult::*;
                 if let Some(r) = self.unreplied_requests.get(sub_id) {
-                    match try_answer_request(
-                                    &mut self.db,
-                                    &self.s, 
-                                    r
-                            )? {
-                        Resolved => {
-                            println!("  replied");
+                    if r.inhibit_send {
+                        println!("  refreshed");
+                        happy.push(sub_id);
+                        continue;
+                    }
+                    let result = try_answer_request(
+                                &mut self.db,
+                                now,
+                                &self.s,
+                                r)?;
+                    match result {
+                        Resolved(AdjustTtlResult::Ok) => {
+                            println!("  replied.");
                             happy.push(sub_id);
                         }
-                        ResolvedButNeedsRefresh => {
+                        Resolved(AdjustTtlResult::Expired) => {
                             println!("  replied?");
+                            happy.push(sub_id);
+                        }
+                        Resolved(AdjustTtlResult::Negative(_)) => {
+                            println!("  replied...");
                             happy.push(sub_id);
                         }
                         UnknownsRemain(_) => {
@@ -404,7 +452,7 @@ impl ProgState {
         
         if weird_querty {
             println!("  direct");
-            //println!("Weird request {:?}",p);
+            //println!("Weird requestnow >= then && now - then {:?}",p);
             self.r2a.insert(p.header.id, src);
             self.s.send_to(&buf, &self.upstream)?;
             return Ok(());
@@ -412,24 +460,34 @@ impl ProgState {
         
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         
-        let r = SimplifiedRequest {
+        let mut r = SimplifiedRequest {
             id : p.header.id,
             q : simplified_questions,
             sa: src,
             t: now,
+            inhibit_send: false,
         };
         
         use TryAnswerRequestResult::*;
-        let result = try_answer_request(&mut self.db, &self.s, &r)?;
+        let result = try_answer_request(&mut self.db, now, &self.s, &r)?;
         
         match result {
-            Resolved => {
+            Resolved(AdjustTtlResult::Ok) => {
                 println!("  cached");
                 return Ok(());
             }
-            ResolvedButNeedsRefresh => {
+            Resolved(AdjustTtlResult::Expired) => {
                 println!("  cached, but refreshing");
-                return Ok(());
+                r.inhibit_send = true;
+            }
+            Resolved(AdjustTtlResult::Negative(x)) => {
+                if x >= NEG_TTL {
+                    println!("  cached, negative {}, refreshing", x);
+                    r.inhibit_send = true;
+                } else {
+                    println!("  cached, negative {}.", x);
+                    return Ok(());
+                }
             }
             UnknownsRemain(_) => {
                 println!("  queued");
