@@ -1,7 +1,3 @@
-#![allow(unused_mut)]
-#![allow(unused_variables)]
-#![allow(dead_code)]
-#![allow(unused_imports)]
 extern crate dns_parser;
 extern crate compactmap;
 #[macro_use]
@@ -14,23 +10,19 @@ extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
 
-use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{UdpSocket, SocketAddr};
 use dns_parser::Packet;
-use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
+use dns_parser::QueryType::{A,AAAA, All as QTAll};
 use dns_parser::QueryClass::{IN,Any as QCAny};
 use std::collections::HashMap;
-use std::collections::HashSet;
 use compactmap::CompactMap;
 use rusty_leveldb::DB;
-use std::time::Duration;
-use std::io::Cursor;
 use bytes::{BufMut,BigEndian as BE};
 use serde_cbor::de::from_slice;
 use serde_cbor::ser::to_vec;
 use multimap::MultiMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use structopt::StructOpt;
-use std::num::ParseIntError;
 use std::path::PathBuf;
 
 #[derive(StructOpt, Debug)]
@@ -50,7 +42,6 @@ struct Opt {
 }
 
 
-type CacheId = usize;
 type Time = u64;
 
 type BoxResult<T> = Result<T,Box<std::error::Error>>;
@@ -65,12 +56,6 @@ struct CacheEntry {
     a6: Option<(Time,Vec<(Ipv6AddrB,Ttl)>)>,
 }
 
-struct RequestToUs {
-    entry: CacheId,
-    reply_to: SocketAddr,
-    id: u16,
-}
-
 struct SimplifiedQuestion {
     dom: String,
     a4: bool,
@@ -80,7 +65,6 @@ struct SimplifiedRequest {
     id : u16,
     sa : SocketAddr,
     q: Vec<SimplifiedQuestion>,
-    t: Time,
     inhibit_send: bool,
 }
 
@@ -465,7 +449,6 @@ impl ProgState {
             id : p.header.id,
             q : simplified_questions,
             sa: src,
-            t: now,
             inhibit_send: false,
         };
         
@@ -525,9 +508,9 @@ fn run(opt: Opt) -> BoxResult<()> {
     let s = UdpSocket::bind(opt.listen_addr)?;
     let upstream = opt.upstream_addr;
     
-    let mut r2a : HashMap<u16, SocketAddr> = HashMap::new();
+    let r2a : HashMap<u16, SocketAddr> = HashMap::new();
     
-    let mut buf = [0; 1600];
+    let buf = [0; 1600];
     
     let mut ps = ProgState {
         db,
