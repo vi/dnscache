@@ -17,8 +17,6 @@ extern crate structopt_derive;
 // TODO: negative cache
 // TODO: re-requesting stale data
 
-const NEG_TTL : u64 = 3;
-
 use std::net::{UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr};
 use dns_parser::Packet;
 use dns_parser::QueryType::{self, A,AAAA,All as QTAll};
@@ -49,6 +47,9 @@ struct Opt {
 
     #[structopt(help = "Path to LevelDB database directory", parse(from_os_str))]
     db: PathBuf,
+    
+    #[structopt(long = "neg-ttl", help = "Negative reply TTL, seconds", default_value = "30", parse(try_from_str))]
+    neg_ttl: u64,
 }
 
 
@@ -255,6 +256,7 @@ struct ProgState {
     amt: usize,
     r2a: HashMap<u16, SocketAddr>,
     upstream : SocketAddr,
+    neg_ttl: u64,
     
     unreplied_requests: UnrepliedRequests,
     dom_update_subscriptions: DomUpdateSubstriptions,
@@ -481,7 +483,7 @@ impl ProgState {
                 r.inhibit_send = true;
             }
             Resolved(AdjustTtlResult::Negative(x)) => {
-                if x >= NEG_TTL {
+                if x >= self.neg_ttl {
                     println!("  cached, negative {}, refreshing", x);
                     r.inhibit_send = true;
                 } else {
@@ -537,6 +539,7 @@ fn run(opt: Opt) -> BoxResult<()> {
         amt: 0,
         unreplied_requests: CompactMap::new(),
         dom_update_subscriptions: MultiMap::new(),
+        neg_ttl: opt.neg_ttl,
     };
     
     loop {
