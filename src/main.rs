@@ -331,10 +331,39 @@ impl ProgState {
                 cached = Default::default();
             }
             
+            // FIXME: DRY between A and AAAA cases
+            
+            let mut use_cached_a4 = false;
+            let mut use_cached_a6 = false;
+            
             if entry.a4.is_none() && cached.a4.is_some() {
-                entry.a4 = cached.a4;
+                use_cached_a4 = true;
             }
             if entry.a6.is_none() && cached.a6.is_some() {
+                use_cached_a6 = true;
+            }
+            
+            if let Some((_,ref entry_a4)) = entry.a4 {
+                if let Some((_,ref cached_a4)) = cached.a4 {
+                    if entry_a4.is_empty() && !cached_a4.is_empty() {
+                        println!("  refusing to forget A entries");
+                        use_cached_a4 = true;
+                    }
+                }
+            }
+            if let Some((_,ref entry_a6)) = entry.a6 {
+                if let Some((_,ref cached_a6)) = cached.a6 {
+                    if entry_a6.is_empty() && !cached_a6.is_empty() {
+                        println!("  refusing to forget AAAA entries");
+                        use_cached_a6 = true;
+                    }
+                }
+            }
+            
+            if use_cached_a4 {
+                entry.a4 = cached.a4;
+            }
+            if use_cached_a6 {
                 entry.a6 = cached.a6;
             }
 
