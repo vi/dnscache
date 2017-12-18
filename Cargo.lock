@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "dnscache"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "compactmap 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
