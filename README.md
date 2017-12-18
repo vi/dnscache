@@ -48,6 +48,7 @@ Notes:
 * Uncached queries (non-A, non-AAAA or non-IN) are forwarded based in ID
 * TTL may be 0 in replies
 * Single threaded, single UDP socket
+* If all A or AAAA entries disappear in reply, cached ones retain instead. AAAA resolution sometimes works in Tor DNS resolver, sometimes not.
 
 Concerns:
 
