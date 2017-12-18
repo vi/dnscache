@@ -540,6 +540,10 @@ fn run(opt: &Opt) -> BoxResult<()> {
     
     let buf = [0; 1600];
     
+    if opt.listen_addr.ip().is_loopback() && !opt.upstream_addr.ip().is_loopback() {
+        eprintln!("Warning: listening on localhost, but sending to non-localhost upstream server is not supported");
+    }
+    
     let mut ps = ProgState {
         db,
         s,
