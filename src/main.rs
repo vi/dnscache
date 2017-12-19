@@ -260,18 +260,42 @@ impl ProgState {
         // 2. check for cache poisoning
         // TODO: also check id
         
+        fn check_dom(this: &ProgState, dom: &str, id: u16) -> bool {
+            if let Some(rqs) = this.dom_update_subscriptions.get_vec(dom) {
+                let mut good = false;
+                for i in rqs {
+                    if let Some(rq) = this.unreplied_requests.get(*i) {
+                        if rq.id == id {
+                            good = true;
+                        }
+                    } else {
+                        eprintln!("  assertion failed 1");
+                        return false
+                    }
+                }
+                if !good {
+                    println!("  ID mismatch");
+                    return false
+                } else {
+                    return true
+                }
+            } else {
+                println!("  unsolicited reply for {}", dom);
+                return false
+            }
+        }
+        
         for q in &p.questions {
             let dom = q.qname.to_string();
-            if !self.dom_update_subscriptions.contains_key(&dom) {
-                println!("  unsolicited reply for {}", dom);
+            if ! check_dom(self, dom.as_str(), p.header.id) {
                 return Ok(())
             }
         }
         
         for ans in &p.answers {
             let dom = ans.name.to_string();
-            if !self.dom_update_subscriptions.contains_key(&dom) {
-                println!("  unsolicited reply for {}", dom);
+            if ! check_dom(self, dom.as_str(), p.header.id) {
+                println!("  offending entry: {:?}", ans.data);
                 return Ok(())
             }
         }
