@@ -52,6 +52,7 @@ Notes:
 
 Concerns:
 
+* CNAME not handled at all yet
 * ID field is handled inconsistently
 * Entries are never deleted from cache
 * If data is stale, it first replies with TTL 0, then re-checks in upstream
