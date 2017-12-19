@@ -43,6 +43,7 @@ Features:
 * Multi-question queries
 * Minimal protection from poisoning by filtering domain names in replies
 * Always tries to immediately return some A or AAAA records for client to try, no waiting for refreshing.
+* Clamping TTL betwen user-specified min and max (the cache contains unmodified value).
 
 Notes:
 
