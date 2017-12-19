@@ -49,11 +49,11 @@ Notes:
 * TTL may be 0 in replies
 * Single threaded, single UDP socket
 * If all A or AAAA entries disappear in reply, cached ones retain instead. AAAA resolution sometimes works in Tor DNS resolver, sometimes not.
+* CNAMEs are resolved recursively into A/AAAA entries and are not persisted
+* Unsupported queries (MX, All) are forwarded as-is based on ID only
 
 Concerns:
 
-* CNAME not handled at all yet
-* ID field is handled inconsistently
 * Entries are never deleted from cache
 * If data is stale, it first replies with TTL 0, then re-checks in upstream
 * The used LevelDB implementation is not recommended for serious use yet.
