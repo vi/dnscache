@@ -14,6 +14,7 @@ use std::net::{UdpSocket, SocketAddr};
 use dns_parser::Packet;
 use dns_parser::QueryType::{A,AAAA, All as QTAll};
 use dns_parser::QueryClass::{IN,Any as QCAny};
+use dns_parser::RRData;
 use std::collections::HashMap;
 use compactmap::CompactMap;
 use rusty_leveldb::DB;
@@ -257,8 +258,7 @@ impl ProgState {
             return Ok(());
         }
         
-        // 2. check for cache poisoning
-        // TODO: also check id
+        // 2. check questions for cache poisoning
         
         fn check_dom(this: &ProgState, dom: &str, id: u16) -> bool {
             if let Some(rqs) = this.dom_update_subscriptions.get_vec(dom) {
@@ -292,10 +292,51 @@ impl ProgState {
             }
         }
         
+        // 3. Make list of CNAME redirections
+        
+        let mut cnames = HashMap::new();
+        let mut actual_answers = vec![];
+        
         for ans in &p.answers {
-            let dom = ans.name.to_string();
+            if let RRData::CNAME(x) = ans.data {
+                let from = ans.name.to_string();
+                let to = x.to_string();
+                println!("  {} -> {}", &from, &to);
+                cnames.insert(to, from);
+            }
+        }
+        
+        // 4. Make list of IP addresses of domains, following CNAMEs
+        
+        for ans in &p.answers {
+            if ans.cls != dns_parser::Class::IN { continue; }
+            match ans.data {
+                RRData::A(_)    => { }
+                RRData::AAAA(_) => { }
+                _ => continue,
+            }
+        
+            let mut dom = ans.name.to_string();
+            let mut recursion_limit = 10;
+            loop {
+                if let Some(x) = cnames.get(&dom) {
+                    dom = x.clone();
+                    recursion_limit -= 1;
+                    if recursion_limit == 0 {
+                        println!("  Too many CNAMEs");
+                    }
+                    continue;
+                }
+                break;
+            }
+            actual_answers.push((dom, &ans.data, ans.ttl));
+        }
+        
+        // 5. Check after-CNAME-redirection answers for cache poisoning
+        
+        for &(ref dom, ref data, _) in &actual_answers {
             if ! check_dom(self, dom.as_str(), p.header.id) {
-                println!("  offending entry: {:?}", ans.data);
+                println!("  offending entry: {:?}", data);
                 return Ok(())
             }
         }
@@ -304,7 +345,7 @@ impl ProgState {
         
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         
-        // 3. build a list of new entries
+        // 6. build a list of new entries
         
         let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
         
@@ -322,29 +363,28 @@ impl ProgState {
             }
         }
         
-        for ans in &p.answers {
-            let dom = ans.name.to_string();
-            if ans.cls != dns_parser::Class::IN { continue; }
-            
+        for (dom, data, ttl) in actual_answers {
             let ce = tmp.entry(dom).or_insert_with(Default::default);
             
-            use dns_parser::RRData;
-            match ans.data {
-                RRData::A(ip4)    => {
+            match data {
+                &RRData::A(ip4)    => {
                     if ce.a4 == None { ce.a4 = Some((now, Vec::new())); }
                     let v = ce.a4.as_mut().unwrap();
-                    v.1.push((ip4.octets(), ans.ttl));
+                    v.1.push((ip4.octets(), ttl));
                 }
-                RRData::AAAA(ip6) => {
+                &RRData::AAAA(ip6) => {
                     if ce.a6 == None { ce.a6 = Some((now, Vec::new())); }
                     let v = ce.a6.as_mut().unwrap();
-                    v.1.push((ip6.octets(), ans.ttl));
+                    v.1.push((ip6.octets(), ttl));
                 }
-                _ => continue,
+                _ => {
+                    println!("  assertion failed 2");
+                    continue
+                }
             }
         }
         
-        // 4. save entries to the database, maybe merging with old entries
+        // 7. save entries to the database, maybe merging with old entries
         
         for (dom, mut entry) in &mut tmp {
             
@@ -396,7 +436,7 @@ impl ProgState {
         }
         self.db.flush()?;
         
-        // 5. Try replying to queued queries
+        // 8. Try replying to queued queries
         
         for (dom, _) in tmp {
             let subs = self.dom_update_subscriptions.remove(&dom).unwrap();
