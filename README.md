@@ -12,7 +12,7 @@ There are some pre-built versions on Github releases.
 ---
 
 ```
-dnscache 0.1.1
+dnscache 0.1.2
 Vitaly _Vi Shukela <vi0oss@gmail.com>
 Simple DNS cacher.
 
