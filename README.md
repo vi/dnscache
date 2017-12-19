@@ -24,6 +24,8 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
+        --max-ttl <max_ttl>    Maximum TTL of A or AAAA entry, seconds [default: 4294967295]
+        --min-ttl <min_ttl>    Minimum TTL of A or AAAA entry, seconds [default: 0]
         --neg-ttl <neg_ttl>    Negative reply TTL, seconds [default: 30]
 
 ARGS:
