@@ -17,3 +17,4 @@ rusty-leveldb = { version = "0.1" }
 multimap = "0.4"
 structopt = "0.1"
 structopt-derive = "0.1"
+clamp = "0.1"

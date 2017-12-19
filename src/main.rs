@@ -9,6 +9,7 @@ extern crate multimap;
 extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
+extern crate clamp;
 
 use std::net::{UdpSocket, SocketAddr};
 use dns_parser::Packet;
@@ -42,6 +43,12 @@ struct Opt {
     
     #[structopt(long = "neg-ttl", help = "Negative reply TTL, seconds", default_value = "30", parse(try_from_str))]
     neg_ttl: u64,
+    
+    #[structopt(long = "max-ttl", help = "Maximum TTL of A or AAAA entry, seconds", default_value="4294967295", parse(try_from_str))]
+    max_ttl: u32,
+    
+    #[structopt(long = "min-ttl", help = "Minimum TTL of A or AAAA entry, seconds", default_value="0", parse(try_from_str))]
+    min_ttl: u32,
 }
 
 
@@ -152,10 +159,11 @@ enum AdjustTtlResult {
     Negative(u64),
 }
 
-fn adjust_ttl<T:Copy+Clone>(v: &[(T, Ttl)], now: Time, then: Time) -> (AdjustTtlResult, Vec<(T, Ttl)>){
+fn adjust_ttl<T:Copy+Clone>(v: &[(T, Ttl)], now: Time, then: Time, max_ttl: u32, min_ttl: u32) -> (AdjustTtlResult, Vec<(T, Ttl)>){
     let mut vv = Vec::with_capacity(v.len());
     let mut result = AdjustTtlResult::Ok;
     for &(x, ttl) in v {
+        let ttl = clamp::clamp(min_ttl, ttl, max_ttl);
         let newttl;
         if now.saturating_sub(then) >= u64::from(ttl) {
             newttl = 0;
@@ -175,7 +183,9 @@ fn try_answer_request(
                 db : &mut DB,
                 now : Time,
                 s : &UdpSocket,
-                r: &SimplifiedRequest
+                r: &SimplifiedRequest,
+                max_ttl: u32,
+                min_ttl: u32,
                 ) -> BoxResult<TryAnswerRequestResult> {
     
     let mut num_unknowns = 0;
@@ -191,7 +201,7 @@ fn try_answer_request(
             let ce : CacheEntry = from_slice(&ceb[..])?;
             if q.a4 {
                 if let Some(a4) = ce.a4 {
-                    let (tr,a4adj) = adjust_ttl(&a4.1, now, a4.0);
+                    let (tr,a4adj) = adjust_ttl(&a4.1, now, a4.0, max_ttl, min_ttl);
                     if ttl_status == AdjustTtlResult::Ok { ttl_status = tr }
                     ans_a4.push((q.dom.clone(), a4adj));
                 } else {
@@ -202,7 +212,7 @@ fn try_answer_request(
             
             if q.a6 {
                 if let Some(a6) = ce.a6 {
-                    let (tr,a6adj) = adjust_ttl(&a6.1, now, a6.0);
+                    let (tr,a6adj) = adjust_ttl(&a6.1, now, a6.0, max_ttl, min_ttl);
                     if ttl_status == AdjustTtlResult::Ok { ttl_status = tr }
                     ans_a6.push((q.dom.clone(), a6adj));
                 } else {
@@ -238,6 +248,8 @@ struct ProgState {
     r2a: HashMap<u16, SocketAddr>,
     upstream : SocketAddr,
     neg_ttl: u64,
+    max_ttl: u32,
+    min_ttl: u32,
     
     unreplied_requests: UnrepliedRequests,
     dom_update_subscriptions: DomUpdateSubstriptions,
@@ -450,7 +462,10 @@ impl ProgState {
                                 &mut self.db,
                                 now,
                                 &self.s,
-                                r)?;
+                                r,
+                                self.max_ttl,
+                                self.min_ttl,
+                                )?;
                     match result {
                         Resolved(AdjustTtlResult::Ok) => {
                             if ! dummy_request {
@@ -545,7 +560,14 @@ impl ProgState {
         };
         
         use TryAnswerRequestResult::*;
-        let result = try_answer_request(&mut self.db, now, &self.s, &r)?;
+        let result = try_answer_request(
+                                        &mut self.db, 
+                                        now, 
+                                        &self.s, 
+                                        &r,
+                                        self.max_ttl,
+                                        self.min_ttl,
+                                        )?;
         
         match result {
             Resolved(AdjustTtlResult::Ok) => {
@@ -618,6 +640,8 @@ fn run(opt: &Opt) -> BoxResult<()> {
         unreplied_requests: CompactMap::new(),
         dom_update_subscriptions: MultiMap::new(),
         neg_ttl: opt.neg_ttl,
+        max_ttl: opt.max_ttl,
+        min_ttl: opt.min_ttl,
     };
     
     loop {
