@@ -61,3 +61,26 @@ Concerns:
 * If data is stale, it first replies with TTL 0, then re-checks in upstream
 * The used LevelDB implementation is not recommended for serious use yet.
 * The same socket used both for client and for upstream communication. Can't listen only on 127.0.0.1, but rely on 8.8.8.8.
+
+---
+
+Database format: LevelDB database with domain names like `internals.rust-lang.org` as keys and [CBOR](https://cbor.io) as values. Sample value:
+
+```
+{"a4": [1513726378, [[[64, 71, 168, 211], 599]]], "a6": [1513726378, [[[32, 1, 4, 112, 0, 1, 3, 168, 0, 0, 0, 0, 0, 0, 2, 17], 599]]]}
+
+00000000  a2 62 61 34 82 1a 5a 39  a1 aa 81 82 84 18 40 18  |.ba4..Z9......@.|
+00000010  47 18 a8 18 d3 19 02 57  62 61 36 82 1a 5a 39 a1  |G......Wba6..Z9.|
+00000020  aa 81 82 90 18 20 01 04  18 70 00 01 03 18 a8 00  |..... ...p......|
+00000030  00 00 00 00 00 02 11 19  02 57                    |.........W|
+0000003a
+```
+
+Simple description:
+
+```
+{"a4": [timestamp_unix, [IPv4/TTL pairs list]], "a6": null (for never requested value)}
+```
+
+The format is subject to change.
+
