@@ -259,12 +259,12 @@ enum StepResult {
 }
 use StepResult::*;
 
-macro_rules! steps {
+macro_rules! may_return_early {
     [
         $(
             $func:ident(
                 $($e:expr),*
-            )
+            )?
         );*;
     ] => {
         $(
@@ -283,27 +283,27 @@ impl ProgState {
         
         // Recipe:
         
-        steps!{
-            handle_direct_replies(self, buf, &p);
-            check_questions(self, &p);
+        may_return_early!{
+            handle_direct_replies(self, buf, &p)?;
+            check_questions(self, &p)?;
         };
         
         let mut cnames = HashMap::new();
         let mut actual_answers = vec![];
         
-        steps! {
-            get_cname_redirs(&p, &mut cnames);
-            make_list_of_ips(&p, &cnames, &mut actual_answers);
-            check_answers(self, &p, &actual_answers);
+        may_return_early! {
+            get_cname_redirs(&p, &mut cnames)?;
+            make_list_of_ips(&p, &cnames, &mut actual_answers)?;
+            check_answers(self, &p, &actual_answers)?;
         }
         
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
         
-        steps! {
-            build_new_entries(&p, actual_answers, &mut tmp, now);
-            save_entries_to_database(self, &mut tmp);
-            reply_to_client(self, tmp, now);
+        may_return_early! {
+            build_new_entries(&p, actual_answers, &mut tmp, now)?;
+            save_entries_to_database(self, &mut tmp)?;
+            reply_to_client(self, tmp, now)?;
         }
         
         return Ok(());
