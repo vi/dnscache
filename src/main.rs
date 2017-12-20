@@ -3,6 +3,7 @@ extern crate compactmap;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_cbor;
+extern crate serde_bytes;
 extern crate rusty_leveldb;
 extern crate bytes;
 extern crate multimap;
@@ -60,13 +61,25 @@ type Time = u64;
 type BoxResult<T> = Result<T, Box<std::error::Error>>;
 type Ttl = u32;
 
-type Ipv4AddrB = [u8; 4];
-type Ipv6AddrB = [u8; 16];
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
+struct AddrTtl {
+    ttl: Ttl,
+
+    // FIXME: should be a static array in the better world
+    #[serde(with = "serde_bytes")]
+    ip: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
+struct CacheEntry2 {
+    t: Time,
+    a: Vec<AddrTtl>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 struct CacheEntry {
-    a4: Option<(Time, Vec<(Ipv4AddrB, Ttl)>)>, // None - unqueried
-    a6: Option<(Time, Vec<(Ipv6AddrB, Ttl)>)>,
+    a4: Option<CacheEntry2>, // None - unqueried
+    a6: Option<CacheEntry2>,
 }
 
 struct SimplifiedQuestion {
@@ -84,8 +97,8 @@ struct SimplifiedRequest {
 fn send_dns_reply(
     s: &UdpSocket,
     r: &SimplifiedRequest,
-    ans_a: &[(String, Vec<(Ipv4AddrB, Ttl)>)],
-    ans_aaaa: &[(String, Vec<(Ipv6AddrB, Ttl)>)],
+    ans_a: &[(String, Vec<AddrTtl>)],
+    ans_aaaa: &[(String, Vec<AddrTtl>)],
 ) -> BoxResult<()> {
 
     let mut num_answers = ans_a.iter().fold(0, |a, x| a + x.1.len()) +
@@ -125,23 +138,29 @@ fn send_dns_reply(
         reply_buf.put_u16::<BE>(0x0001); // IN
     }
     for &(ref dom, ref a) in ans_a {
-        for &(ip4, ttl) in a {
+        for &AddrTtl { ref ip, ttl } in a {
             putname(&mut reply_buf, dom);
             reply_buf.put_u16::<BE>(0x0001); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
             reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(4); // data len
-            reply_buf.put(&ip4[..]);
+            if ip.len() != 4 {
+                return Err("non 4-byte IPv4")?;
+            }
+            reply_buf.put(&ip[..]);
         }
     }
     for &(ref dom, ref aaaa) in ans_aaaa {
-        for &(ip6, ttl) in aaaa {
+        for &AddrTtl { ref ip, ttl } in aaaa {
             putname(&mut reply_buf, dom.as_str());
             reply_buf.put_u16::<BE>(0x001C); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
             reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(16); // data len
-            reply_buf.put(&ip6[..]);
+            if ip.len() != 16 {
+                return Err("non 16-byte IPv6")?;
+            }
+            reply_buf.put(&ip[..]);
         }
     }
 
@@ -162,16 +181,16 @@ enum AdjustTtlResult {
     Negative(u64),
 }
 
-fn adjust_ttl<T: Copy + Clone>(
-    v: &[(T, Ttl)],
+fn adjust_ttl(
+    v: &[AddrTtl],
     now: Time,
     then: Time,
     max_ttl: u32,
     min_ttl: u32,
-) -> (AdjustTtlResult, Vec<(T, Ttl)>) {
+) -> (AdjustTtlResult, Vec<AddrTtl>) {
     let mut vv = Vec::with_capacity(v.len());
     let mut result = AdjustTtlResult::Ok;
-    for &(x, ttl) in v {
+    for &AddrTtl { ref ip, ttl } in v {
         let ttl = clamp::clamp(min_ttl, ttl, max_ttl);
         let newttl;
         if now.saturating_sub(then) >= u64::from(ttl) {
@@ -180,7 +199,10 @@ fn adjust_ttl<T: Copy + Clone>(
         } else {
             newttl = ttl.saturating_sub(now.saturating_sub(then) as u32);
         }
-        vv.push((x, newttl));
+        vv.push(AddrTtl {
+            ip: ip.clone(),
+            ttl: newttl,
+        });
     }
     if v.is_empty() {
         result = AdjustTtlResult::Negative(now.saturating_sub(then));
@@ -210,7 +232,7 @@ fn try_answer_request(
             let ce: CacheEntry = from_slice(&ceb[..])?;
             if q.a4 {
                 if let Some(a4) = ce.a4 {
-                    let (tr, a4adj) = adjust_ttl(&a4.1, now, a4.0, max_ttl, min_ttl);
+                    let (tr, a4adj) = adjust_ttl(&a4.a, now, a4.t, max_ttl, min_ttl);
                     if ttl_status == AdjustTtlResult::Ok {
                         ttl_status = tr
                     }
@@ -223,7 +245,7 @@ fn try_answer_request(
 
             if q.a6 {
                 if let Some(a6) = ce.a6 {
-                    let (tr, a6adj) = adjust_ttl(&a6.1, now, a6.0, max_ttl, min_ttl);
+                    let (tr, a6adj) = adjust_ttl(&a6.a, now, a6.t, max_ttl, min_ttl);
                     if ttl_status == AdjustTtlResult::Ok {
                         ttl_status = tr
                     }
@@ -467,10 +489,16 @@ impl ProgState {
                 let ce = tmp.entry(dom).or_insert_with(Default::default);
 
                 if q.qtype == A || q.qtype == QTAll {
-                    ce.a4 = Some((now, Vec::new()));
+                    ce.a4 = Some(CacheEntry2 {
+                        t: now,
+                        a: Vec::new(),
+                    });
                 }
                 if q.qtype == AAAA || q.qtype == QTAll {
-                    ce.a6 = Some((now, Vec::new()));
+                    ce.a6 = Some(CacheEntry2 {
+                        t: now,
+                        a: Vec::new(),
+                    });
                 }
             }
 
@@ -480,17 +508,29 @@ impl ProgState {
                 match *data {
                     RRData::A(ip4) => {
                         if ce.a4 == None {
-                            ce.a4 = Some((now, Vec::new()));
+                            ce.a4 = Some(CacheEntry2 {
+                                t: now,
+                                a: Vec::new(),
+                            });
                         }
                         let v = ce.a4.as_mut().unwrap();
-                        v.1.push((ip4.octets(), ttl));
+                        v.a.push(AddrTtl {
+                            ip: ip4.octets().to_vec(),
+                            ttl,
+                        });
                     }
                     RRData::AAAA(ip6) => {
                         if ce.a6 == None {
-                            ce.a6 = Some((now, Vec::new()));
+                            ce.a6 = Some(CacheEntry2 {
+                                t: now,
+                                a: Vec::new(),
+                            });
                         }
                         let v = ce.a6.as_mut().unwrap();
-                        v.1.push((ip6.octets(), ttl));
+                        v.a.push(AddrTtl {
+                            ip: ip6.octets().to_vec(),
+                            ttl,
+                        });
                     }
                     _ => {
                         println!("  assertion failed 2");
@@ -528,17 +568,17 @@ impl ProgState {
                     use_cached_a6 = true;
                 }
 
-                if let Some((_, ref entry_a4)) = entry.a4 {
-                    if let Some((_, ref cached_a4)) = cached.a4 {
-                        if entry_a4.is_empty() && !cached_a4.is_empty() {
+                if let Some(CacheEntry2 { a: ref new_a4, .. }) = entry.a4 {
+                    if let Some(CacheEntry2 { a: ref cached_a4, .. }) = cached.a4 {
+                        if new_a4.is_empty() && !cached_a4.is_empty() {
                             println!("  refusing to forget A entries");
                             use_cached_a4 = true;
                         }
                     }
                 }
-                if let Some((_, ref entry_a6)) = entry.a6 {
-                    if let Some((_, ref cached_a6)) = cached.a6 {
-                        if entry_a6.is_empty() && !cached_a6.is_empty() {
+                if let Some(CacheEntry2 { a: ref new_a6, .. }) = entry.a6 {
+                    if let Some(CacheEntry2 { a: ref cached_a6, .. }) = cached.a6 {
+                        if new_a6.is_empty() && !cached_a6.is_empty() {
                             println!("  refusing to forget AAAA entries");
                             use_cached_a6 = true;
                         }
