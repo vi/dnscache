@@ -124,7 +124,6 @@ fn send_dns_reply(
             putname(&mut reply_buf, dom);
             reply_buf.put_u16::<BE>(0x0001); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
-            // FIXME: adjust TTL based on time it lived in the cache
             reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(4); // data len
             reply_buf.put(&ip4[..]);
@@ -135,7 +134,6 @@ fn send_dns_reply(
             putname(&mut reply_buf, dom.as_str());
             reply_buf.put_u16::<BE>(0x001C); // A
             reply_buf.put_u16::<BE>(0x0001); // IN
-            // FIXME: adjust TTL based on time it lived in the cache
             reply_buf.put_u32::<BE>(ttl); // TTL
             reply_buf.put_u16::<BE>(16); // data len
             reply_buf.put(&ip6[..]);
