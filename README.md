@@ -12,7 +12,7 @@ There are some pre-built versions on Github releases.
 ---
 
 ```
-dnscache 0.1.2
+dnscache 0.1.3
 Vitaly _Vi Shukela <vi0oss@gmail.com>
 Simple DNS cacher.
 
@@ -67,19 +67,21 @@ Concerns:
 Database format: LevelDB database with domain names like `internals.rust-lang.org` as keys and [CBOR](https://cbor.io) as values. Sample value:
 
 ```
-{"a4": [1513726378, [[[64, 71, 168, 211], 599]]], "a6": [1513726378, [[[32, 1, 4, 112, 0, 1, 3, 168, 0, 0, 0, 0, 0, 0, 2, 17], 599]]]}
+{"a4": {"t": 1513810855, "a": [{"ttl": 599, "ip": h'4047a8d3'}]}, "a6": {"t": 1513810855, "a": [{"ttl": 599, "ip": h'20010470000103a80000000000000211'}]}}
 
-00000000  a2 62 61 34 82 1a 5a 39  a1 aa 81 82 84 18 40 18  |.ba4..Z9......@.|
-00000010  47 18 a8 18 d3 19 02 57  62 61 36 82 1a 5a 39 a1  |G......Wba6..Z9.|
-00000020  aa 81 82 90 18 20 01 04  18 70 00 01 03 18 a8 00  |..... ...p......|
-00000030  00 00 00 00 00 02 11 19  02 57                    |.........W|
-0000003a
+00000000  a2 62 61 34 a2 61 74 1a  5a 3a eb a7 61 61 81 a2  |.ba4.at.Z:..aa..|
+00000010  63 74 74 6c 19 02 57 62  69 70 44 40 47 a8 d3 62  |cttl..WbipD@G..b|
+00000020  61 36 a2 61 74 1a 5a 3a  eb a7 61 61 81 a2 63 74  |a6.at.Z:..aa..ct|
+00000030  74 6c 19 02 57 62 69 70  50 20 01 04 70 00 01 03  |tl..WbipP ..p...|
+00000040  a8 00 00 00 00 00 00 02  11                       |.........|
+00000049
 ```
 
 Simple description:
 
 ```
-{"a4": [timestamp_unix, [IPv4/TTL pairs list]], "a6": null (for never requested value)}
+{"a4": {"t": timestamp_unix, "a":[IPv4/TTL pairs list]}, "a6": null (for never requested values)}
+{"t": ..., "a":[(empty list)]} means negatively cached
 ```
 
 The format is subject to change.
