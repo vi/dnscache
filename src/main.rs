@@ -243,8 +243,6 @@ type DomUpdateSubstriptions = MultiMap<String, UnrepliedRequestId>;
 struct ProgState {
     db : DB,
     s : UdpSocket,
-    buf: [u8; 1600],
-    amt: usize,
     r2a: HashMap<u16, SocketAddr>,
     upstream : SocketAddr,
     neg_ttl: u64,
@@ -255,22 +253,78 @@ struct ProgState {
     dom_update_subscriptions: DomUpdateSubstriptions,
 }
 
+
+#[derive(PartialEq)]
+enum StepResult {
+    GoOn,
+    EarlyReturn,
+}
+use StepResult::*;
+
+macro_rules! steps {
+    [
+        $(
+            $func:ident(
+                $($e:expr),*
+            )
+        );*;
+    ] => {
+        $(
+            if $func($($e),*)? == StepResult::EarlyReturn {
+                return Ok(());
+            }
+        )* 
+    }
+}
+
 impl ProgState {
-    fn packet_from_upstream(&mut self) -> BoxResult<()> {
+    fn packet_from_upstream(&mut self, buf: &[u8]) -> BoxResult<()> {
         //println!("reply: {:?}", p);
         println!("  upstream");
-        let buf = &self.buf[..self.amt];
         let p = Packet::parse(buf)?;
         
-        // 1. handle direct replies
+        // Recipe:
         
-        if let Some(ca) = self.r2a.remove(&p.header.id) {
-            println!("  direct reply");
-            self.s.send_to(buf, &ca)?;
-            return Ok(());
+        steps!{
+            handle_direct_replies(self, buf, &p);
+            check_questions(self, &p);
+        };
+        
+        let mut cnames = HashMap::new();
+        let mut actual_answers = vec![];
+        
+        steps! {
+            get_cname_redirs(&p, &mut cnames);
+            make_list_of_ips(&p, &cnames, &mut actual_answers);
+            check_answers(self, &p, &actual_answers);
         }
         
-        // 2. check questions for cache poisoning
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
+        
+        steps! {
+            build_new_entries(&p, actual_answers, &mut tmp, now);
+            save_entries_to_database(self, &mut tmp);
+            reply_to_client(self, tmp, now);
+        }
+        
+        return Ok(());
+        
+        
+        // Implementation:
+        
+        // 1. Handle direct requests
+        
+        fn handle_direct_replies(this: &mut ProgState, buf: &[u8], p: &Packet)
+                    -> BoxResult<StepResult> {
+            if let Some(ca) = this.r2a.remove(&p.header.id) {
+                println!("  direct reply");
+                this.s.send_to(buf, &ca)?;
+                Ok(EarlyReturn)
+            } else {
+                Ok(GoOn)
+            }
+        }
         
         fn check_dom(this: &ProgState, dom: &str, id: u16) -> bool {
             if let Some(rqs) = this.dom_update_subscriptions.get_vec(dom) {
@@ -297,216 +351,258 @@ impl ProgState {
             }
         }
         
-        for q in &p.questions {
-            let dom = q.qname.to_string();
-            if ! check_dom(self, dom.as_str(), p.header.id) {
-                return Ok(())
+        // 2. Check if questin list cache poisoning attempt
+        
+        fn check_questions(this: &ProgState, p: &Packet)
+                    -> BoxResult<StepResult> {
+            for q in &p.questions {
+                let dom = q.qname.to_string();
+                if ! check_dom(this, dom.as_str(), p.header.id) {
+                    return Ok(EarlyReturn)
+                }
             }
+            Ok(GoOn)
         }
         
-        // 3. Make list of CNAME redirections
-        
-        let mut cnames = HashMap::new();
-        let mut actual_answers = vec![];
-        
-        for ans in &p.answers {
-            if let RRData::CNAME(x) = ans.data {
-                let from = ans.name.to_string();
-                let to = x.to_string();
-                println!("  {} -> {}", &from, &to);
-                cnames.insert(to, from);
+        // 3. Make a map of CNAME redirections for later use
+        fn get_cname_redirs(p: &Packet, cnames: &mut HashMap<String, String>)
+                    -> BoxResult<StepResult> {
+            for ans in &p.answers {
+                if let RRData::CNAME(x) = ans.data {
+                    let from = ans.name.to_string();
+                    let to = x.to_string();
+                    println!("  {} -> {}", &from, &to);
+                    cnames.insert(to, from);
+                }
             }
+            Ok(GoOn)
         }
         
         // 4. Make list of IP addresses of domains, following CNAMEs
         
-        for ans in &p.answers {
-            if ans.cls != dns_parser::Class::IN { continue; }
-            match ans.data {
-                RRData::A(_) | RRData::AAAA(_) => { }
-                _ => continue,
-            }
-        
-            let mut dom = ans.name.to_string();
-            let mut recursion_limit = 10;
-            loop {
-                if let Some(x) = cnames.get(&dom) {
-                    dom = x.clone();
-                    recursion_limit -= 1;
-                    if recursion_limit == 0 {
-                        println!("  Too many CNAMEs");
-                    }
-                    continue;
+        fn make_list_of_ips<'a>(
+                            p: &'a Packet, 
+                            cnames: &HashMap<String, String>,
+                            actual_answers: &mut Vec<(String, &RRData<'a>, Ttl)>,
+                    ) -> BoxResult<StepResult> {
+            for ans in &p.answers {
+                if ans.cls != dns_parser::Class::IN { continue; }
+                match ans.data {
+                    RRData::A(_) | RRData::AAAA(_) => { }
+                    _ => continue,
                 }
-                break;
+            
+                let mut dom = ans.name.to_string();
+                let mut recursion_limit = 10;
+                loop {
+                    if let Some(x) = cnames.get(&dom) {
+                        dom = x.clone();
+                        recursion_limit -= 1;
+                        if recursion_limit == 0 {
+                            println!("  Too many CNAMEs");
+                            // TODO: fix as separate commit
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                actual_answers.push((dom, &ans.data, ans.ttl));
             }
-            actual_answers.push((dom, &ans.data, ans.ttl));
+            Ok(GoOn)
         }
         
         // 5. Check after-CNAME-redirection answers for cache poisoning
-        
-        for &(ref dom, data, _) in &actual_answers {
-            if ! check_dom(self, dom.as_str(), p.header.id) {
-                println!("  offending entry: {:?}", data);
-                return Ok(())
+        fn check_answers(
+                         this: &ProgState,
+                         p: &Packet,
+                         actual_answers: &[(String, &RRData, Ttl)],
+                        ) -> BoxResult<StepResult> {
+                    
+            for &(ref dom, data, _) in actual_answers {
+                if ! check_dom(this, dom.as_str(), p.header.id) {
+                    println!("  offending entry: {:?}", data);
+                    return Ok(EarlyReturn)
+                }
             }
+            Ok(GoOn)
         }
         
         // now we are decided to save things and reply
         
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        
         // 6. build a list of new entries
         
-        let mut tmp : HashMap<String, CacheEntry> = HashMap::new();
+        fn build_new_entries(
+                 p: &Packet,
+                 actual_answers: Vec<(String, &RRData, Ttl)>,
+                 tmp: &mut HashMap<String, CacheEntry>,
+                 now: Time,
+                ) -> BoxResult<StepResult> {
         
-        for q in &p.questions {
-            if q.qclass != IN { continue; }
-            let dom = q.qname.to_string();
-            
-            let ce = tmp.entry(dom).or_insert_with(Default::default);
-            
-            if q.qtype == A    || q.qtype == QTAll {
-                ce.a4 = Some((now, Vec::new()));
-            }
-            if q.qtype == AAAA || q.qtype == QTAll {
-                ce.a6 = Some((now, Vec::new()));
-            }
-        }
         
-        for (dom, data, ttl) in actual_answers {
-            let ce = tmp.entry(dom).or_insert_with(Default::default);
-            
-            match *data {
-                RRData::A(ip4)    => {
-                    if ce.a4 == None { ce.a4 = Some((now, Vec::new())); }
-                    let v = ce.a4.as_mut().unwrap();
-                    v.1.push((ip4.octets(), ttl));
+            for q in &p.questions {
+                if q.qclass != IN { continue; }
+                let dom = q.qname.to_string();
+                
+                let ce = tmp.entry(dom).or_insert_with(Default::default);
+                
+                if q.qtype == A    || q.qtype == QTAll {
+                    ce.a4 = Some((now, Vec::new()));
                 }
-                RRData::AAAA(ip6) => {
-                    if ce.a6 == None { ce.a6 = Some((now, Vec::new())); }
-                    let v = ce.a6.as_mut().unwrap();
-                    v.1.push((ip6.octets(), ttl));
-                }
-                _ => {
-                    println!("  assertion failed 2");
-                    continue
+                if q.qtype == AAAA || q.qtype == QTAll {
+                    ce.a6 = Some((now, Vec::new()));
                 }
             }
+            
+            for (dom, data, ttl) in actual_answers {
+                let ce = tmp.entry(dom).or_insert_with(Default::default);
+                
+                match *data {
+                    RRData::A(ip4)    => {
+                        if ce.a4 == None { ce.a4 = Some((now, Vec::new())); }
+                        let v = ce.a4.as_mut().unwrap();
+                        v.1.push((ip4.octets(), ttl));
+                    }
+                    RRData::AAAA(ip6) => {
+                        if ce.a6 == None { ce.a6 = Some((now, Vec::new())); }
+                        let v = ce.a6.as_mut().unwrap();
+                        v.1.push((ip6.octets(), ttl));
+                    }
+                    _ => {
+                        println!("  assertion failed 2");
+                        continue
+                    }
+                }
+            }
+            Ok(GoOn)
         }
         
         // 7. save entries to the database, maybe merging with old entries
-        
-        for (dom, mut entry) in &mut tmp {
-            
-            let cached : CacheEntry;
-            if let Some(ceb) = self.db.get(dom.as_bytes()) {
-                cached = from_slice(&ceb[..])?;
-            } else {
-                cached = Default::default();
-            }
-            
-            // FIXME: DRY between A and AAAA cases
-            
-            let mut use_cached_a4 = false;
-            let mut use_cached_a6 = false;
-            
-            if entry.a4.is_none() && cached.a4.is_some() {
-                use_cached_a4 = true;
-            }
-            if entry.a6.is_none() && cached.a6.is_some() {
-                use_cached_a6 = true;
-            }
-            
-            if let Some((_,ref entry_a4)) = entry.a4 {
-                if let Some((_,ref cached_a4)) = cached.a4 {
-                    if entry_a4.is_empty() && !cached_a4.is_empty() {
-                        println!("  refusing to forget A entries");
-                        use_cached_a4 = true;
+        fn save_entries_to_database(
+                 this: &mut ProgState,
+                 tmp: &mut HashMap<String, CacheEntry>,
+                ) -> BoxResult<StepResult> {
+                
+            for (dom, mut entry) in tmp {
+                
+                let cached : CacheEntry;
+                if let Some(ceb) = this.db.get(dom.as_bytes()) {
+                    cached = from_slice(&ceb[..])?;
+                } else {
+                    cached = Default::default();
+                }
+                
+                // FIXME: DRY between A and AAAA cases
+                
+                let mut use_cached_a4 = false;
+                let mut use_cached_a6 = false;
+                
+                if entry.a4.is_none() && cached.a4.is_some() {
+                    use_cached_a4 = true;
+                }
+                if entry.a6.is_none() && cached.a6.is_some() {
+                    use_cached_a6 = true;
+                }
+                
+                if let Some((_,ref entry_a4)) = entry.a4 {
+                    if let Some((_,ref cached_a4)) = cached.a4 {
+                        if entry_a4.is_empty() && !cached_a4.is_empty() {
+                            println!("  refusing to forget A entries");
+                            use_cached_a4 = true;
+                        }
                     }
                 }
-            }
-            if let Some((_,ref entry_a6)) = entry.a6 {
-                if let Some((_,ref cached_a6)) = cached.a6 {
-                    if entry_a6.is_empty() && !cached_a6.is_empty() {
-                        println!("  refusing to forget AAAA entries");
-                        use_cached_a6 = true;
+                if let Some((_,ref entry_a6)) = entry.a6 {
+                    if let Some((_,ref cached_a6)) = cached.a6 {
+                        if entry_a6.is_empty() && !cached_a6.is_empty() {
+                            println!("  refusing to forget AAAA entries");
+                            use_cached_a6 = true;
+                        }
                     }
                 }
+                
+                if use_cached_a4 {
+                    entry.a4 = cached.a4;
+                }
+                if use_cached_a6 {
+                    entry.a6 = cached.a6;
+                }
+    
+                this.db.put(dom.as_bytes(), &to_vec(&entry)?[..])?;
+                println!("  saved to database: {}", dom);
             }
-            
-            if use_cached_a4 {
-                entry.a4 = cached.a4;
-            }
-            if use_cached_a6 {
-                entry.a6 = cached.a6;
-            }
-
-            self.db.put(dom.as_bytes(), &to_vec(&entry)?[..])?;
-            println!("  saved to database: {}", dom);
+            this.db.flush()?;
+            Ok(GoOn)
         }
-        self.db.flush()?;
         
         // 8. Try replying to queued queries
         
-        for (dom, _) in tmp {
-            let subs = self.dom_update_subscriptions.remove(&dom).unwrap();
-            let mut unhappy = Vec::new();
-            let mut happy = Vec::new();
-            for sub_id in subs {
-                use TryAnswerRequestResult::*;
-                if let Some(r) = self.unreplied_requests.get(sub_id) {
-                    let dummy_request = r.inhibit_send;
-                    let result = try_answer_request(
-                                &mut self.db,
-                                now,
-                                &self.s,
-                                r,
-                                self.max_ttl,
-                                self.min_ttl,
-                                )?;
-                    match result {
-                        Resolved(AdjustTtlResult::Ok) => {
-                            if ! dummy_request {
-                                println!("  replied.");
-                            } else {
-                                println!("  refreshed.");
-                            }
-                            happy.push(sub_id);
-                        }
-                        Resolved(AdjustTtlResult::Expired) => {
-                            if ! dummy_request {
-                                println!("  replied?");
+        fn reply_to_client(
+                 this: &mut ProgState,
+                 tmp: HashMap<String, CacheEntry>,
+                 now: Time,
+                ) -> BoxResult<StepResult> {
+        
+            for (dom, _) in tmp {
+                let subs = this.dom_update_subscriptions.remove(&dom).unwrap();
+                let mut unhappy = Vec::new();
+                let mut happy = Vec::new();
+                for sub_id in subs {
+                    use TryAnswerRequestResult::*;
+                    if let Some(r) = this.unreplied_requests.get(sub_id) {
+                        let dummy_request = r.inhibit_send;
+                        let result = try_answer_request(
+                                    &mut this.db,
+                                    now,
+                                    &this.s,
+                                    r,
+                                    this.max_ttl,
+                                    this.min_ttl,
+                                    )?;
+                        match result {
+                            Resolved(AdjustTtlResult::Ok) => {
+                                if ! dummy_request {
+                                    println!("  replied.");
+                                } else {
+                                    println!("  refreshed.");
+                                }
                                 happy.push(sub_id);
-                            } else {
+                            }
+                            Resolved(AdjustTtlResult::Expired) => {
+                                if ! dummy_request {
+                                    println!("  replied?");
+                                    happy.push(sub_id);
+                                } else {
+                                    unhappy.push(sub_id);
+                                }
+                            }
+                            Resolved(AdjustTtlResult::Negative(_)) => {
+                                println!("  replied...");
+                                happy.push(sub_id);
+                            }
+                            UnknownsRemain(_) => {
                                 unhappy.push(sub_id);
                             }
                         }
-                        Resolved(AdjustTtlResult::Negative(_)) => {
-                            println!("  replied...");
-                            happy.push(sub_id);
-                        }
-                        UnknownsRemain(_) => {
-                            unhappy.push(sub_id);
-                        }
+                    } else {
+                        // request got replied in previous iteration
                     }
-                } else {
-                    // request got replied in previous iteration
+                }
+                for id in happy {
+                    let _ = this.unreplied_requests.remove(id);
+                }
+                if !unhappy.is_empty() {
+                    this.dom_update_subscriptions.entry(dom).or_insert_vec(unhappy);
                 }
             }
-            for id in happy {
-                let _ = self.unreplied_requests.remove(id);
-            }
-            if !unhappy.is_empty() {
-                self.dom_update_subscriptions.entry(dom).or_insert_vec(unhappy);
-            }
+            Ok(GoOn)
         }
-        
-        Ok(())
     }
     
-    fn packet_from_client(&mut self, src: SocketAddr) -> BoxResult<()> {
-        let buf = &self.buf[..self.amt];
+    
+    
+    
+    
+    fn packet_from_client(&mut self, src: SocketAddr, buf: &[u8]) -> BoxResult<()> {
         let p = Packet::parse(buf)?;
         //println!("request {:?}", p);
         let mut weird_querty = false;
@@ -602,13 +698,13 @@ impl ProgState {
         Ok(())
     }
 
-    fn serve1(&mut self) -> BoxResult<()> {
-        let (amt, src) = self.s.recv_from(&mut self.buf)?;
-        self.amt = amt;
+    fn serve1(&mut self, buf:&mut [u8]) -> BoxResult<()> {
+        let (amt, src) = self.s.recv_from(buf)?;
+        let buf = &buf[..amt];
         if src == self.upstream {
-            self.packet_from_upstream()?;
+            self.packet_from_upstream(buf)?;
         } else {
-            self.packet_from_client(src)?;
+            self.packet_from_client(src, buf)?;
         }
         Ok(())
     }
@@ -623,7 +719,7 @@ fn run(opt: &Opt) -> BoxResult<()> {
     
     let r2a : HashMap<u16, SocketAddr> = HashMap::new();
     
-    let buf = [0; 1600];
+    let mut buf = [0; 1600];
     
     if opt.listen_addr.ip().is_loopback() && !opt.upstream_addr.ip().is_loopback() {
         eprintln!("Warning: listening on localhost, but sending to non-localhost upstream server is not supported");
@@ -634,8 +730,6 @@ fn run(opt: &Opt) -> BoxResult<()> {
         s,
         upstream,
         r2a,
-        buf,
-        amt: 0,
         unreplied_requests: CompactMap::new(),
         dom_update_subscriptions: MultiMap::new(),
         neg_ttl: opt.neg_ttl,
@@ -644,7 +738,7 @@ fn run(opt: &Opt) -> BoxResult<()> {
     };
     
     loop {
-        if let Err(e) = ps.serve1() {
+        if let Err(e) = ps.serve1(&mut buf) {
             eprintln!("Error: {:?}", e);
         }
     }
