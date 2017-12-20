@@ -323,8 +323,7 @@ impl ProgState {
         for ans in &p.answers {
             if ans.cls != dns_parser::Class::IN { continue; }
             match ans.data {
-                RRData::A(_)    => { }
-                RRData::AAAA(_) => { }
+                RRData::A(_) | RRData::AAAA(_) => { }
                 _ => continue,
             }
         
@@ -346,7 +345,7 @@ impl ProgState {
         
         // 5. Check after-CNAME-redirection answers for cache poisoning
         
-        for &(ref dom, ref data, _) in &actual_answers {
+        for &(ref dom, data, _) in &actual_answers {
             if ! check_dom(self, dom.as_str(), p.header.id) {
                 println!("  offending entry: {:?}", data);
                 return Ok(())
@@ -378,13 +377,13 @@ impl ProgState {
         for (dom, data, ttl) in actual_answers {
             let ce = tmp.entry(dom).or_insert_with(Default::default);
             
-            match data {
-                &RRData::A(ip4)    => {
+            match *data {
+                RRData::A(ip4)    => {
                     if ce.a4 == None { ce.a4 = Some((now, Vec::new())); }
                     let v = ce.a4.as_mut().unwrap();
                     v.1.push((ip4.octets(), ttl));
                 }
-                &RRData::AAAA(ip6) => {
+                RRData::AAAA(ip6) => {
                     if ce.a6 == None { ce.a6 = Some((now, Vec::new())); }
                     let v = ce.a6.as_mut().unwrap();
                     v.1.push((ip6.octets(), ttl));
