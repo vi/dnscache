@@ -398,7 +398,7 @@ impl ProgState {
                         recursion_limit -= 1;
                         if recursion_limit == 0 {
                             println!("  Too many CNAMEs");
-                            // TODO: fix as separate commit
+                            return Ok(EarlyReturn)
                         }
                         continue;
                     }
