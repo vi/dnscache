@@ -2,6 +2,13 @@
 
 use super::*;
 
+use dns_parser::Packet;
+use dns_parser::QueryType::{A, AAAA, All as QTAll};
+use dns_parser::QueryClass::{IN, Any as QCAny};
+use dns_parser::RRData;
+use bytes::{BufMut, BigEndian as BE};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 pub(crate) fn send_dns_reply<N:Network>(
     net: &N,
     r: &SimplifiedRequest<N::ClientId>,
@@ -479,7 +486,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
                 entry.a6 = cached.a6;
             }
 
-            self.db.put(dom.as_str(), &entry)?;
+            self.db.put(dom.as_str(), entry)?;
             println!("  saved to database: {}", dom);
         }
         self.db.flush()?;

@@ -10,17 +10,10 @@ extern crate bytes;
 extern crate multimap;
 extern crate clamp;
 
-use dns_parser::Packet;
-use dns_parser::QueryType::{A, AAAA, All as QTAll};
-use dns_parser::QueryClass::{IN, Any as QCAny};
-use dns_parser::RRData;
+
 use std::collections::HashMap;
 use compactmap::CompactMap;
-use bytes::{BigEndian as BE};
-#[allow(unused_imports)]
-use bytes::BufMut;
 use multimap::MultiMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub struct Options {

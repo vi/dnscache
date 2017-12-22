@@ -1,17 +1,12 @@
 // Implemented by Vitaly "_Vi" Shukela in 2017; Licence = MIT or Apache 2.0
 
-extern crate dns_parser;
-extern crate compactmap;
+extern crate dnscache;
 extern crate serde_cbor;
 extern crate serde_bytes;
 extern crate rusty_leveldb;
-extern crate bytes;
-extern crate multimap;
 extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
-extern crate clamp;
-extern crate dnscache;
 
 use std::net::{UdpSocket, SocketAddr};
 use rusty_leveldb::{DB as LevelDB};
