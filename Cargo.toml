@@ -1,6 +1,6 @@
 [package]
 name = "dnscache"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Vitaly _Vi Shukela <vi0oss@gmail.com>"]
 description = "Simple DNS proxy with forced caching"
 repository = "https://github.com/vi/dnscache"
