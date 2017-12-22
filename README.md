@@ -7,7 +7,9 @@ Trades consistency for availability. Not for serious use.
 
 License = MIT or Apache 2.0
 
-There are some pre-built versions on Github releases.
+There are some pre-built versions on Github releases. Versions further than 0.1.2 have no command-line-user-facing benefits yet.
+
+DNSCache can also be used as a library (with your own database and network abstraction, but with DNS packets still as byte blobs).
 
 ---
 
