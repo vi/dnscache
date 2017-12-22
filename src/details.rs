@@ -47,7 +47,7 @@ pub(crate) fn send_dns_reply<N: Network>(
         } else if q.a6 {
             reply_buf.put_u16::<BE>(0x001C); // AAAA
         } else {
-            println!("?");
+            error!("Strange question?");
             reply_buf.put_u16::<BE>(0x0000);
         }
         reply_buf.put_u16::<BE>(0x0001); // IN
@@ -210,8 +210,7 @@ macro_rules! may_return_early {
 
 impl<DB: Database, N: Network> DnsCache<DB, N> {
     fn packet_from_upstream(&mut self, buf: &[u8]) -> BoxResult<()> {
-        //println!("reply: {:?}", p);
-        println!("  upstream");
+        info!("  upstream");
         let p = Packet::parse(buf)?;
 
         may_return_early!{
@@ -246,7 +245,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
 
     fn handle_direct_replies(&mut self, buf: &[u8], p: &Packet) -> BoxResult<StepResult> {
         if let Some(ca) = self.r2a.remove(&p.header.id) {
-            println!("  direct reply");
+            info!("  direct reply");
             self.net.send_to_client(buf, ca)?;
             Ok(EarlyReturn)
         } else {
@@ -263,18 +262,18 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
                         good = true;
                     }
                 } else {
-                    eprintln!("  assertion failed 1");
+                    error!("  assertion failed 1");
                     return false;
                 }
             }
             if !good {
-                println!("  ID mismatch");
+                warn!("  ID mismatch");
                 return false;
             } else {
                 return true;
             }
         } else {
-            println!("  unsolicited reply for {}", dom);
+            info!("  unsolicited reply for {}", dom);
             return false;
         }
     }
@@ -297,7 +296,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
             if let RRData::CNAME(x) = ans.data {
                 let from = ans.name.to_string();
                 let to = x.to_string();
-                println!("  {} -> {}", &from, &to);
+                debug!("  {} -> {}", &from, &to);
                 cnames.insert(to, from);
             }
         }
@@ -327,7 +326,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
                     dom = x.clone();
                     recursion_limit -= 1;
                     if recursion_limit == 0 {
-                        println!("  Too many CNAMEs");
+                        error!("  Too many CNAMEs");
                         return Ok(EarlyReturn);
                     }
                     continue;
@@ -348,7 +347,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
 
         for &(ref dom, data, _) in actual_answers {
             if !self.check_dom(dom.as_str(), p.header.id) {
-                println!("  offending entry: {:?}", data);
+                error!("  offending entry: {:?}", data);
                 return Ok(EarlyReturn);
             }
         }
@@ -420,7 +419,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
                     });
                 }
                 _ => {
-                    println!("  assertion failed 2");
+                    error!("  assertion failed 2");
                     continue;
                 }
             }
@@ -458,7 +457,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
             if let Some(CacheEntry2 { a: ref new_a4, .. }) = entry.a4 {
                 if let Some(CacheEntry2 { a: ref cached_a4, .. }) = cached.a4 {
                     if new_a4.is_empty() && !cached_a4.is_empty() {
-                        println!("  refusing to forget A entries");
+                        info!("  refusing to forget A entries");
                         use_cached_a4 = true;
                     }
                 }
@@ -466,7 +465,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
             if let Some(CacheEntry2 { a: ref new_a6, .. }) = entry.a6 {
                 if let Some(CacheEntry2 { a: ref cached_a6, .. }) = cached.a6 {
                     if new_a6.is_empty() && !cached_a6.is_empty() {
-                        println!("  refusing to forget AAAA entries");
+                        info!("  refusing to forget AAAA entries");
                         use_cached_a6 = true;
                     }
                 }
@@ -480,7 +479,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
             }
 
             self.db.put(dom.as_str(), entry)?;
-            println!("  saved to database: {}", dom);
+            info!("  saved to database: {}", dom);
         }
         self.db.flush()?;
         Ok(GoOn)
@@ -513,22 +512,22 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
                     match result {
                         Resolved(AdjustTtlResult::Ok) => {
                             if !dummy_request {
-                                println!("  replied.");
+                                info!("  replied.");
                             } else {
-                                println!("  refreshed.");
+                                info!("  refreshed.");
                             }
                             happy.push(sub_id);
                         }
                         Resolved(AdjustTtlResult::Expired) => {
                             if !dummy_request {
-                                println!("  replied?");
+                                info!("  replied?");
                                 happy.push(sub_id);
                             } else {
                                 unhappy.push(sub_id);
                             }
                         }
                         Resolved(AdjustTtlResult::Negative(_)) => {
-                            println!("  replied...");
+                            info!("  replied...");
                             happy.push(sub_id);
                         }
                         UnknownsRemain(_) => {
@@ -557,13 +556,12 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
 
     fn packet_from_client(&mut self, src: N::ClientId, buf: &[u8]) -> BoxResult<()> {
         let p = Packet::parse(buf)?;
-        //println!("request {:?}", p);
         let mut weird_querty = false;
 
         let mut simplified_questions = Vec::with_capacity(1);
 
         if p.questions.len() > 1 {
-            println!("A query with {} questions:", p.questions.len());
+            info!("A query with {} questions:", p.questions.len());
         }
 
         for q in &p.questions {
@@ -592,8 +590,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
         }
 
         if weird_querty {
-            println!("  direct");
-            //println!("Weird requestnow >= then && now - then {:?}",p);
+            info!("  direct");
             self.r2a.insert(p.header.id, src);
             self.net.send_to_upstream(buf)?;
             return Ok(());
@@ -620,24 +617,24 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
 
         match result {
             Resolved(AdjustTtlResult::Ok) => {
-                println!("  cached");
+                info!("  cached");
                 return Ok(());
             }
             Resolved(AdjustTtlResult::Expired) => {
-                println!("  cached, but refreshing");
+                info!("  cached, but refreshing");
                 r.inhibit_send = true;
             }
             Resolved(AdjustTtlResult::Negative(x)) => {
                 if x >= self.opts.neg_ttl {
-                    println!("  cached, negative {}, refreshing", x);
+                    info!("  cached, negative {}, refreshing", x);
                     r.inhibit_send = true;
                 } else {
-                    println!("  cached, negative {}.", x);
+                    info!("  cached, negative {}.", x);
                     return Ok(());
                 }
             }
             UnknownsRemain(_) => {
-                println!("  queued");
+                info!("  queued");
             }
         }
 

@@ -9,6 +9,8 @@ extern crate serde_bytes;
 extern crate bytes;
 extern crate multimap;
 extern crate clamp;
+#[macro_use]
+extern crate log;
 
 
 use std::collections::HashMap;
