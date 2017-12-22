@@ -4,7 +4,6 @@ extern crate dns_parser;
 extern crate compactmap;
 #[macro_use]
 extern crate serde_derive;
-extern crate serde_cbor;
 extern crate serde_bytes;
 extern crate bytes;
 extern crate multimap;

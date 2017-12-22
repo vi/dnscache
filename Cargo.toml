@@ -11,13 +11,17 @@ dns-parser = { version = "0.7" }
 compactmap = { version = "0.3" }
 bytes = { version = "0.4" }
 serde = { version = "1" }
-serde_cbor = { version = "0.6" }
 serde_derive = { version = "1" }
-rusty-leveldb = { version = "0.1" }
-multimap = "0.4"
-structopt = "0.1"
-structopt-derive = "0.1"
-clamp = "0.1"
 serde_bytes = "0.10"
+multimap = "0.4"
+clamp = "0.1"
 log = "0.3"
-println_logger = "0.1"
+serde_cbor = { version = "0.6", optional=true }
+structopt = {version="0.1", optional=true}
+structopt-derive = {version="0.1", optional=true}
+rusty-leveldb = { version = "0.1", optional=true }
+println_logger = {version="0.1", optional=true}
+
+[features]
+default=["bin"]
+bin=["structopt","structopt-derive","serde_cbor","rusty-leveldb","println_logger"]
