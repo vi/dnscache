@@ -7,7 +7,7 @@ extern crate rusty_leveldb;
 extern crate structopt;
 #[macro_use]
 extern crate structopt_derive;
-extern crate log;
+extern crate println_logger;
 
 use std::net::{UdpSocket, SocketAddr};
 use rusty_leveldb::DB as LevelDB;
@@ -89,17 +89,7 @@ impl Database for MyDatabase {
     }
 }
 
-struct PrintlnLogger;
-impl log::Log for PrintlnLogger {
-    fn enabled(&self, _:&log::LogMetadata)->bool {true}
-    fn log(&self, record:&log::LogRecord) {
-        println!("{}", record.args());
-    }
-}
-
 fn run(opt: &Opt) -> BoxResult<()> {
-    log::set_logger(|m|{m.set(log::LogLevelFilter::Info); Box::new(PrintlnLogger{})})?;
-
     let dbopts: rusty_leveldb::Options = Default::default();
     let db = LevelDB::open(
         opt.db.to_str().expect(
@@ -131,6 +121,7 @@ fn run(opt: &Opt) -> BoxResult<()> {
 }
 
 fn main() {
+    println_logger::init();
     let opt = Opt::from_args();
     if let Err(e) = run(&opt) {
         eprintln!("error: {}", e);
