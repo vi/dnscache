@@ -33,17 +33,17 @@ impl Default for Options {
 }
 
 
-pub enum ReceiveResult<C:Copy> {
+pub enum ReceiveResult<C: Copy> {
     FromClient(C),
-    FromUpstream
+    FromUpstream,
 }
 
 /// Network abstraction
 pub trait Network {
-    type ClientId : Copy;
+    type ClientId: Copy;
     fn send_to_client(&self, buf: &[u8], client: Self::ClientId) -> BoxResult<()>;
     fn send_to_upstream(&self, buf: &[u8]) -> BoxResult<()>;
-    fn recv_from(&self, buf: &mut[u8]) -> BoxResult<(usize, ReceiveResult<Self::ClientId>)>;
+    fn recv_from(&self, buf: &mut [u8]) -> BoxResult<(usize, ReceiveResult<Self::ClientId>)>;
 }
 
 
@@ -106,7 +106,7 @@ pub(crate) struct SimplifiedQuestion {
     a4: bool,
     a6: bool,
 }
-pub(crate) struct SimplifiedRequest<C:Copy> {
+pub(crate) struct SimplifiedRequest<C: Copy> {
     id: u16,
     clientid: C,
     q: Vec<SimplifiedQuestion>,
@@ -129,12 +129,12 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
             dom_update_subscriptions: MultiMap::new(),
         }
     }
-    
+
     pub fn serve_one_packet(&mut self) -> BoxResult<()> {
         let mut buf = [0; 1600];
         self.serve1(&mut buf)
     }
-    
+
     // BoxResult<!> ?
     pub fn run_endlessly(&mut self) -> BoxResult<()> {
         let mut buf = [0; 1600];

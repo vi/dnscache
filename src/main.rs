@@ -9,7 +9,7 @@ extern crate structopt;
 extern crate structopt_derive;
 
 use std::net::{UdpSocket, SocketAddr};
-use rusty_leveldb::{DB as LevelDB};
+use rusty_leveldb::DB as LevelDB;
 use serde_cbor::de::from_slice;
 use serde_cbor::ser::to_vec;
 use structopt::StructOpt;
@@ -59,7 +59,7 @@ impl Network for MyNetwork {
         self.s.send_to(buf, &self.upstream)?;
         Ok(())
     }
-    fn recv_from(&self, buf: &mut[u8]) -> BoxResult<(usize, ReceiveResult<Self::ClientId>)> {
+    fn recv_from(&self, buf: &mut [u8]) -> BoxResult<(usize, ReceiveResult<Self::ClientId>)> {
         let (amt, src) = self.s.recv_from(buf)?;
         if src == self.upstream {
             Ok((amt, ReceiveResult::FromUpstream))
@@ -105,12 +105,9 @@ fn run(opt: &Opt) -> BoxResult<()> {
             "Warning: listening on localhost, but sending to non-localhost upstream server is not supported"
         );
     }
-    
-    let net = MyNetwork {
-        s,
-        upstream,
-    };
-    
+
+    let net = MyNetwork { s, upstream };
+
     let dnscache_opts = CacheOptions {
         neg_ttl: opt.neg_ttl,
         max_ttl: opt.max_ttl,
@@ -118,7 +115,7 @@ fn run(opt: &Opt) -> BoxResult<()> {
     };
 
     let mut dnscache = DnsCache::new(MyDatabase(db), net, dnscache_opts);
-    
+
     dnscache.run_endlessly()
 }
 

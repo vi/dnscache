@@ -9,7 +9,7 @@ use dns_parser::RRData;
 use bytes::{BufMut, BigEndian as BE};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) fn send_dns_reply<N:Network>(
+pub(crate) fn send_dns_reply<N: Network>(
     net: &N,
     r: &SimplifiedRequest<N::ClientId>,
     ans_a: &[(String, Vec<AddrTtl>)],
@@ -125,7 +125,7 @@ fn adjust_ttl(
     (result, vv)
 }
 
-fn try_answer_request<DB:Database, N:Network>(
+fn try_answer_request<DB: Database, N: Network>(
     db: &mut DB,
     now: Time,
     net: &N,
@@ -244,11 +244,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
 
     // 1. Handle direct requests
 
-    fn handle_direct_replies(
-        &mut self,
-        buf: &[u8],
-        p: &Packet,
-    ) -> BoxResult<StepResult> {
+    fn handle_direct_replies(&mut self, buf: &[u8], p: &Packet) -> BoxResult<StepResult> {
         if let Some(ca) = self.r2a.remove(&p.header.id) {
             println!("  direct reply");
             self.net.send_to_client(buf, ca)?;
@@ -296,10 +292,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
     }
 
     // 3. Make a map of CNAME redirections for later use
-    fn get_cname_redirs(
-        p: &Packet,
-        cnames: &mut HashMap<String, String>,
-    ) -> BoxResult<StepResult> {
+    fn get_cname_redirs(p: &Packet, cnames: &mut HashMap<String, String>) -> BoxResult<StepResult> {
         for ans in &p.answers {
             if let RRData::CNAME(x) = ans.data {
                 let from = ans.name.to_string();
@@ -442,7 +435,7 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
     ) -> BoxResult<StepResult> {
 
         for (dom, mut entry) in tmp {
-            
+
             let cached: CacheEntry;
             if let Some(ce) = self.db.get(dom)? {
                 cached = ce;
@@ -557,11 +550,11 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
         }
         Ok(GoOn)
     }
-    
-    
-    
-    
-    
+
+
+
+
+
     fn packet_from_client(&mut self, src: N::ClientId, buf: &[u8]) -> BoxResult<()> {
         let p = Packet::parse(buf)?;
         //println!("request {:?}", p);
@@ -616,8 +609,14 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
         };
 
         use self::TryAnswerRequestResult::*;
-        let result =
-            try_answer_request(&mut self.db, now, &self.net, &r, self.opts.max_ttl, self.opts.min_ttl)?;
+        let result = try_answer_request(
+            &mut self.db,
+            now,
+            &self.net,
+            &r,
+            self.opts.max_ttl,
+            self.opts.min_ttl,
+        )?;
 
         match result {
             Resolved(AdjustTtlResult::Ok) => {
