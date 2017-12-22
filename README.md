@@ -86,5 +86,5 @@ Simple description:
 {"t": ..., "a":[(empty list)]} means negatively cached
 ```
 
-The format is subject to change.
+The format is subject to change and is other than one used by pre-build 1.2 binaries.
 
