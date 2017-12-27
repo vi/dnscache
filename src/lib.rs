@@ -4,6 +4,7 @@
 
 
 extern crate dns_parser;
+#[macro_use]
 extern crate compactmap;
 #[macro_use]
 extern crate serde_derive;
@@ -16,7 +17,7 @@ extern crate log;
 
 
 use std::collections::HashMap;
-use compactmap::CompactMap;
+use compactmap::wrapped::CompactMap;
 use multimap::MultiMap;
 
 /// TTL values in seconds
@@ -97,30 +98,30 @@ pub type Ttl = u32;
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 pub struct AddrTtl {
     /// Time to Live, seconds
-    ttl: Ttl,
+    pub ttl: Ttl,
 
     /// IPv4 or IPv6 address. Must be appropriate length (4 / 16 bytes respectively)
     // FIXME: should be a static array in the better world
     #[serde(with = "serde_bytes")]
-    ip: Vec<u8>,
+    pub ip: Vec<u8>,
 }
 
 /// Result of resolution of A or AAAA entries of some domain
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 pub struct CacheEntry2 {
     /// Answer time, UNIX timestamp, seconds
-    t: Time,
+    pub t: Time,
     /// Answer result
-    a: Vec<AddrTtl>,
+    pub a: Vec<AddrTtl>,
 }
 
 /// Remembered status about some domain
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
 pub struct CacheEntry {
     /// Information about A records, if any. None = unqueried yet
-    a4: Option<CacheEntry2>,
+    pub a4: Option<CacheEntry2>,
     /// Information about AAAA records, if any. None = unqueried yet
-    a6: Option<CacheEntry2>,
+    pub a6: Option<CacheEntry2>,
 }
 
 
@@ -140,8 +141,8 @@ pub(crate) struct SimplifiedRequest<C: Copy> {
     inhibit_send: bool,
 }
 
-type UnrepliedRequests<C> = CompactMap<SimplifiedRequest<C>>;
-type UnrepliedRequestId = usize;
+declare_compactmap_token!(UnrepliedRequestId);
+type UnrepliedRequests<C> = CompactMap<UnrepliedRequestId, SimplifiedRequest<C>>;
 type DomUpdateSubstriptions = MultiMap<String, UnrepliedRequestId>;
 
 

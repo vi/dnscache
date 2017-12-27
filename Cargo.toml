@@ -1,6 +1,6 @@
 [package]
 name = "dnscache"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Vitaly _Vi Shukela <vi0oss@gmail.com>"]
 description = "Simple DNS proxy with forced caching"
 repository = "https://github.com/vi/dnscache"
@@ -8,7 +8,7 @@ license = "MIT/Apache-2.0"
 
 [dependencies]
 dns-parser = { version = "0.7" }
-compactmap = { version = "0.3" }
+compactmap = { version = "^0.3.4" }
 bytes = { version = "0.4" }
 serde = { version = "1" }
 serde_derive = { version = "1" }
@@ -25,3 +25,4 @@ println_logger = {version="0.1", optional=true}
 [features]
 default=["bin"]
 bin=["structopt","structopt-derive","serde_cbor","rusty-leveldb","println_logger"]
+

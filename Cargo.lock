@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "compactmap"
-version = "0.3.2"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -90,7 +90,7 @@ version = "0.2.1"
 dependencies = [
  "bytes 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "clamp 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "compactmap 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "compactmap 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "dns-parser 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "multimap 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -362,7 +362,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum bytes 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)" = "d828f97b58cc5de3e40c421d0cf2132d6b2da4ee0e11b8632fa838f0f9333ad6"
 "checksum clamp 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b0113a8ae379a061c89a71d57a809439f5ce550b6a76063ab5ba2b1cb180971f"
 "checksum clap 2.29.0 (registry+https://github.com/rust-lang/crates.io-index)" = "110d43e343eb29f4f51c1db31beb879d546db27998577e5715270a54bcf41d3f"
-"checksum compactmap 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "c1f714f36264974549514b55231870acc02af551540966d674e5419b053ed92c"
+"checksum compactmap 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)" = "77d109161f05b72e806a6f29ca3161f7cd67152884ec34a25e2d1aaa036ee3b9"
 "checksum crc 1.6.0 (registry+https://github.com/rust-lang/crates.io-index)" = "64d4a687c40efbc7d376958117b34d5f1cece11709110a742405bf58e7a34f00"
 "checksum dns-parser 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f7020f6760aea312d43d23cb83bf6c0c49f162541db8b02bf95209ac51dc253d"
 "checksum fuchsia-zircon 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f6c0581a4e363262e52b87f59ee2afe3415361c6ec35e665924eb08afe8ff159"
