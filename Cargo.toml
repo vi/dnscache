@@ -1,6 +1,6 @@
 [package]
 name = "dnscache"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Vitaly _Vi Shukela <vi0oss@gmail.com>"]
 description = "Simple DNS proxy with forced caching"
 repository = "https://github.com/vi/dnscache"
@@ -15,12 +15,12 @@ serde_derive = { version = "1" }
 serde_bytes = "0.10"
 multimap = "0.4"
 clamp = "0.1"
-log = "0.3"
+log = "0.4"
 serde_cbor = { version = "0.6", optional=true }
 structopt = {version="0.1", optional=true}
 structopt-derive = {version="0.1", optional=true}
 rusty-leveldb = { version = "0.1", optional=true }
-println_logger = {version="0.1", optional=true}
+println_logger = {version="0.2", optional=true}
 
 [features]
 default=["bin"]
