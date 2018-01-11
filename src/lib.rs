@@ -170,7 +170,9 @@ impl<DB: Database, N: Network> DnsCache<DB, N> {
     pub fn run_endlessly(&mut self) -> BoxResult<()> {
         let mut buf = [0; 1600];
         loop {
-            self.serve1(&mut buf)?
+            if let Err(e) = self.serve1(&mut buf) {
+                error!("{}", e);
+            }
         }
     }
 }
