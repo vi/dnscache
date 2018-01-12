@@ -75,6 +75,7 @@ Notes:
 * If all A or AAAA entries disappear in reply, cached ones retain instead. AAAA resolution sometimes works in Tor DNS resolver, sometimes not.
 * CNAMEs are resolved recursively into A/AAAA entries and are not persisted
 * Unsupported queries (MX, All) are forwarded as-is based on ID only
+* Entire dnscache is case-sensitive. `google.com` and `Google.com` are queried and cached separately.
 
 Concerns:
 
