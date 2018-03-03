@@ -34,6 +34,25 @@ ARGS:
     <listen_addr>      Listen address and port
     <upstream_addr>    Upstream DNS server address and port
     <db>               Path to LevelDB database directory
+    
+    
+$ dnscache --neg-ttl 7200 127.0.0.1:53 127.0.0.1:6053 db --min-ttl 7200
+A	users.rust-lang.org  cached
+AAAA	users.rust-lang.org  cached
+A	google.com  queued
+  upstream
+  saved to database: google.com
+  replied...
+A	www.google.com  cached, but refreshing
+  upstream
+  refusing to forget A entries
+  saved to database: www.google.com
+A	google.com  cached, negative 31.
+AAAA	vi-notebook  cached, negative 6600.
+AAAA	vi-notebook  cached, negative 6601.
+A	users.rust-lang.org  cached
+AAAA	users.rust-lang.org  cached
+...
 ```
 
 -----
@@ -56,6 +75,7 @@ Notes:
 * If all A or AAAA entries disappear in reply, cached ones retain instead. AAAA resolution sometimes works in Tor DNS resolver, sometimes not.
 * CNAMEs are resolved recursively into A/AAAA entries and are not persisted
 * Unsupported queries (MX, All) are forwarded as-is based on ID only
+* Entire dnscache is case-sensitive. `google.com` and `Google.com` are queried and cached separately.
 
 Concerns:
 
