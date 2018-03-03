@@ -92,9 +92,7 @@ impl Database for MyDatabase {
 fn run(opt: &Opt) -> BoxResult<()> {
     let dbopts: rusty_leveldb::Options = Default::default();
     let db = LevelDB::open(
-        opt.db.to_str().expect(
-            "rusty-leveldb opens only UTF-8 paths",
-        ),
+        &opt.db,
         dbopts,
     )?;
 
