@@ -7,7 +7,7 @@ Trades consistency for availability. Not for serious use.
 
 License = MIT or Apache 2.0
 
-There are some pre-built versions on Github releases. Versions further than 0.1.2 have no command-line-user-facing benefits yet.
+There are some pre-built versions on Github releases. Versions older than 0.3.1 depend on buggy rusy-leveldb and may sporadically panic.
 
 DNSCache can also be used as a library (with your own database and network abstraction, but with DNS packets still as byte blobs).
 
@@ -83,6 +83,7 @@ Concerns:
 * If data is stale, it first replies with TTL 0, then re-checks in upstream
 * The used LevelDB implementation is not recommended for serious use yet.
 * The same socket used both for client and for upstream communication. Can't listen only on 127.0.0.1, but rely on 8.8.8.8.
+* There are no timeouts or timekeeping. Unreplied requests may stay in memory indefinitely.
 
 ---
 
