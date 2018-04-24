@@ -83,7 +83,7 @@ Concerns:
 * If data is stale, it first replies with TTL 0, then re-checks in upstream
 * The used LevelDB implementation is not recommended for serious use yet.
 * The same socket used both for client and for upstream communication. Can't listen only on 127.0.0.1, but rely on 8.8.8.8.
-* There are no timeouts or timekeeping. Unreplied requests may stay in memory indefinitely.
+* There are no timeouts or timekeeping. Unreplied requests may stay in memory indefinitely. There may be a lot of `unsolicited reply for ...` log entries because of replies for retries.
 
 ---
 
