@@ -42,6 +42,10 @@ struct Opt {
     #[structopt(long = "min-ttl", help = "Minimum TTL of A or AAAA entry, seconds",
                 default_value = "0", parse(try_from_str))]
     min_ttl: u32,
+
+    /// Delete information about this domain before startup
+    #[structopt(long="delete",short="D")]
+    delete_domains: Vec<String>,
 }
 
 struct MyNetwork {
@@ -91,10 +95,14 @@ impl Database for MyDatabase {
 
 fn run(opt: &Opt) -> BoxResult<()> {
     let dbopts: rusty_leveldb::Options = Default::default();
-    let db = LevelDB::open(
+    let mut db = LevelDB::open(
         &opt.db,
         dbopts,
     )?;
+
+    for deldm in &opt.delete_domains {
+        db.delete(deldm.as_bytes())?;
+    }
 
     let s = UdpSocket::bind(opt.listen_addr)?;
     let upstream = opt.upstream_addr;
